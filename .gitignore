@@ -1,0 +1,4 @@
+.julia_depot/
+data/
+results/
+.DS_Store
