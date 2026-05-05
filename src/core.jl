@@ -1,22 +1,7 @@
-#=
-================================================================================
-  Core Neural Network Components — Julia Standard Library Only
-  =============================================================
-  Shared types and functions used by all pipeline modules:
-    • Dense layer with He init, L2 reg, gradient clipping
-    • BatchNorm with running stats
-    • Net (flexible architecture) with Dropout + LeakyReLU
-    • Adam optimizer
-    • Evaluation metrics (Acc, Prec, Recall, F1, AUC)
-    • Feature selection & data loading
-================================================================================
-=#
-
 using DelimitedFiles, LinearAlgebra, Statistics, Random, Printf, Dates
 
 const CORE_PROJECT_DIR = dirname(@__DIR__)
 
-# ── Activations ─────────────────────────────────────────────────────────────────
 lrelu(x) = x > 0 ? x : 0.01x
 lrelu_d(x) = x > 0 ? 1.0 : 0.01
 
@@ -26,7 +11,6 @@ function softmax_c(X)
     e ./ sum(e, dims=1)
 end
 
-# ── Dense Layer ─────────────────────────────────────────────────────────────────
 mutable struct Dense
     W::Matrix{Float64}; b::Vector{Float64}
     dW::Matrix{Float64}; db::Vector{Float64}
@@ -61,7 +45,6 @@ function bwd!(l::Dense, d, λ, clip=1.0)
     l.W' * d
 end
 
-# ── Batch Norm ──────────────────────────────────────────────────────────────────
 mutable struct BN
     γ::Vector{Float64}; β::Vector{Float64}
     dγ::Vector{Float64}; dβ::Vector{Float64}
@@ -99,7 +82,6 @@ end
 function bwd!(bn::BN, d)
     m = size(d, 2)
     if !bn.training || size(bn.xn, 2) != m || size(bn.xc, 2) != m || size(bn.si, 1) != size(d, 1)
-        # Approximate with evaluation mode derivatives when shapes don't match
         return d .* bn.γ ./ sqrt.(bn.rσ² .+ 1e-5)
     end
     bn.dγ = vec(sum(d .* bn.xn, dims=2))
@@ -111,7 +93,6 @@ function bwd!(bn::BN, d)
     dxn .* bn.si .+ (2.0 / m) .* dvar .* bn.xc .+ dmu ./ m
 end
 
-# ── Network ─────────────────────────────────────────────────────────────────────
 mutable struct Net
     layers::Vector{Dense}
     bns::Vector{BN}
@@ -185,7 +166,6 @@ function count_params(net::Net)
     sum(length(bn.γ) + length(bn.β) for bn in net.bns)
 end
 
-# ── Utilities ───────────────────────────────────────────────────────────────────
 function onehot(y)
     oh = zeros(2, length(y))
     for (i, v) in enumerate(y); oh[v+1, i] = 1.0; end
@@ -225,7 +205,6 @@ function evaluate(net, X, y)
      cm=(tp=tp, fp=fp, fn=fn, tn=tn))
 end
 
-# ── Feature Selection ───────────────────────────────────────────────────────────
 function select_top_features(X, y, k; verbose=true)
     nf = size(X, 1)
     cors = zeros(nf)
@@ -245,7 +224,6 @@ function select_top_features(X, y, k; verbose=true)
     sort(top_idx)
 end
 
-# ── Data Loading ────────────────────────────────────────────────────────────────
 function load_data(; top_k=300, verbose=true)
     if verbose
         println(" Loading datasets...")
@@ -277,7 +255,6 @@ function load_data(; top_k=300, verbose=true)
     X_train, y_train, X_test, y_test
 end
 
-# ── Quick Train (for architecture evaluation) ──────────────────────────────────
 function quick_train!(net, X_train, y_train, X_test, y_test;
                       epochs=20, lr=5e-4, batch_size=32, l2=1e-4, clip=1.0)
     n = size(X_train, 2)

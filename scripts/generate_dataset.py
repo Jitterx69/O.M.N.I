@@ -21,7 +21,6 @@ import random
 import statistics
 import time
 
-# ─── Configuration ──────────────────────────────────────────────────────────────
 SEED = 42
 N_SAMPLES = 1000
 N_FEATURES = 1000
@@ -36,7 +35,6 @@ METADATA_FILE = os.path.join(DATA_DIR, "dataset_metadata.txt")
 
 random.seed(SEED)
 
-
 def randn():
     """Generate a single standard normal random variable (Box-Muller)."""
     u1 = random.random()
@@ -44,7 +42,6 @@ def randn():
     while u1 == 0:
         u1 = random.random()
     return math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
-
 
 def generate_dataset():
     print("=" * 70)
@@ -54,18 +51,12 @@ def generate_dataset():
     print("=" * 70)
     start = time.time()
 
-    # ── Step 1: Generate informative features ───────────────────────────────
     print("\n[1/7] Generating informative features...")
-    # Use clustered generation: class 0 and class 1 drawn from different distributions
-    # First, decide class labels, then generate features conditionally
     n_per_class = N_SAMPLES // 2
     labels_raw = [0] * n_per_class + [1] * n_per_class
 
-    # Generate cluster centers for each class (in informative feature space)
-    # Class 0 centers and Class 1 centers are separated
     random.seed(SEED)
     
-    # Create well-separated cluster centers for informative features
     center_0 = [randn() * 0.5 for _ in range(N_INFORMATIVE)]
     center_1 = [center_0[i] + (1.5 + abs(randn()) * 0.5) * (1 if i % 2 == 0 else -1) 
                 for i in range(N_INFORMATIVE)]
@@ -79,7 +70,6 @@ def generate_dataset():
             row = [center_1[j] + randn() * 0.6 for j in range(N_INFORMATIVE)]
         X_informative.append(row)
 
-    # ── Step 2: Create redundant features (linear combos) ───────────────────
     print("[2/7] Creating redundant features...")
     mixing = [[randn() * 0.3 for _ in range(N_REDUNDANT)] for _ in range(N_INFORMATIVE)]
 
@@ -88,63 +78,51 @@ def generate_dataset():
         row = []
         for j in range(N_REDUNDANT):
             val = sum(X_informative[i][k] * mixing[k][j] for k in range(N_INFORMATIVE))
-            val += randn() * 0.05  # very small noise to keep signal
+            val += randn() * 0.05
             row.append(val)
         X_redundant.append(row)
 
-    # ── Step 3: Generate noise features ─────────────────────────────────────
     n_noise = N_FEATURES - N_INFORMATIVE - N_REDUNDANT
     print(f"[3/7] Generating {n_noise} noise features...")
     noise_scales = [random.uniform(0.5, 2.0) for _ in range(n_noise)]
     X_noise = [[randn() * noise_scales[j] for j in range(n_noise)] for _ in range(N_SAMPLES)]
 
-    # ── Step 4: Combine all features ────────────────────────────────────────
     print("[4/7] Assembling and shuffling feature matrix...")
     X = []
     for i in range(N_SAMPLES):
         row = X_informative[i] + X_redundant[i] + X_noise[i]
         X.append(row)
 
-    # Shuffle columns so informative features aren't grouped at the start
     col_perm = list(range(N_FEATURES))
     random.shuffle(col_perm)
     X = [[row[col_perm[j]] for j in range(N_FEATURES)] for row in X]
 
-    # ── Step 5: Create non-linear target ────────────────────────────────────
     print("[5/7] Computing non-linear target variable...")
     z = [0.0] * N_SAMPLES
 
     for i in range(N_SAMPLES):
         xi = X_informative[i]
 
-        # Strong polynomial interactions (pairs)
         for k in range(0, min(40, N_INFORMATIVE), 2):
             z[i] += xi[k] * xi[k + 1] * 0.3
 
-        # Direct linear contributions (strong)
         for k in range(0, N_INFORMATIVE):
             z[i] += xi[k] * 0.15
 
-        # Trigonometric features
         for k in range(40, min(60, N_INFORMATIVE)):
             z[i] += math.sin(xi[k] * 1.5) * 0.5
 
-        # Quadratic terms
         for k in range(60, min(80, N_INFORMATIVE)):
             z[i] += xi[k] ** 2 * 0.1
 
-        # Threshold features
         for k in range(80, N_INFORMATIVE):
             z[i] += (1.5 if xi[k] > 0 else -1.5)
 
-        # Small noise on decision boundary (keeps ~96-98% separability)
         z[i] += randn() * 0.3
 
-    # Binary target: above median = 1
     median_z = statistics.median(z)
     y = [1 if zi > median_z else 0 for zi in z]
 
-    # ── Step 6: Shuffle rows and split ──────────────────────────────────────
     print("[6/7] Shuffling and splitting into train/test...")
     indices = list(range(N_SAMPLES))
     random.shuffle(indices)
@@ -153,7 +131,6 @@ def generate_dataset():
     train_indices = indices[:split_idx]
     test_indices = indices[split_idx:]
 
-    # ── Step 7: Save to CSV ─────────────────────────────────────────────────
     print("[7/7] Saving datasets to CSV...")
     os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -171,7 +148,6 @@ def generate_dataset():
     write_csv(TRAIN_FILE, train_indices)
     write_csv(TEST_FILE, test_indices)
 
-    # ── Compute statistics ──────────────────────────────────────────────────
     train_y = [y[i] for i in train_indices]
     test_y = [y[i] for i in test_indices]
     train_pos = sum(train_y)
@@ -179,7 +155,6 @@ def generate_dataset():
     test_pos = sum(test_y)
     test_neg = len(test_y) - test_pos
 
-    # Feature stats (sample from train)
     all_vals = []
     for idx in train_indices[:100]:
         all_vals.extend(X[idx])
@@ -228,7 +203,6 @@ Feature statistics (sample):
     print(f"  ⏱  Generated in {elapsed:.1f}s")
     print(f"{'─' * 70}")
     print(metadata)
-
 
 if __name__ == "__main__":
     generate_dataset()

@@ -2,3 +2,5 @@
 data/
 results/
 .DS_Store
+Project.toml
+.julia/

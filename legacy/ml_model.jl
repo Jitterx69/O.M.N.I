@@ -1,19 +1,3 @@
-#=
-================================================================================
-  Deep Neural Network from Scratch — Julia Standard Library Only
-  ================================================================
-  Fully hand-built ML pipeline with:
-    • Correlation-based feature selection (top-k)
-    • Dense + BatchNorm + Dropout + LeakyReLU
-    • Adam optimizer with L2 regularization & gradient clipping
-    • Cosine annealing LR schedule with warm restarts
-    • Early stopping with best-accuracy model checkpointing
-    • Full evaluation suite
-  
-  Target: 96%+ accuracy, 95%+ precision, 0.9+ AUC
-================================================================================
-=#
-
 using DelimitedFiles, LinearAlgebra, Statistics, Random, Printf, Dates
 
 const SEED = 42; Random.seed!(SEED)
@@ -23,11 +7,10 @@ const INIT_LR = 5e-4
 const PATIENCE = 80
 const DROP = 0.3
 const L2_REG = 1e-4
-const TOP_K = 300          # Select more features — stronger signal now
+const TOP_K = 300
 const GRAD_CLIP = 1.0
 const PROJECT_DIR = @__DIR__
 
-# ── Activations ─────────────────────────────────────────────────────────────────
 lrelu(x) = x > 0 ? x : 0.01x
 lrelu_d(x) = x > 0 ? 1.0 : 0.01
 
@@ -37,7 +20,6 @@ function softmax_c(X)
     e ./ sum(e, dims=1)
 end
 
-# ── Dense Layer ─────────────────────────────────────────────────────────────────
 mutable struct Dense
     W::Matrix{Float64}; b::Vector{Float64}
     dW::Matrix{Float64}; db::Vector{Float64}
@@ -63,7 +45,6 @@ function bwd!(l::Dense, d, λ)
     m = size(d, 2)
     l.dW = d * l.inp' ./ m .+ λ .* l.W
     l.db = vec(sum(d, dims=2)) ./ m
-    # Gradient clipping
     gnorm = sqrt(sum(l.dW .^ 2) + sum(l.db .^ 2))
     if gnorm > GRAD_CLIP
         scale = GRAD_CLIP / gnorm
@@ -73,7 +54,6 @@ function bwd!(l::Dense, d, λ)
     l.W' * d
 end
 
-# ── Batch Norm ──────────────────────────────────────────────────────────────────
 mutable struct BN
     γ::Vector{Float64}; β::Vector{Float64}
     dγ::Vector{Float64}; dβ::Vector{Float64}
@@ -119,7 +99,6 @@ function bwd!(bn::BN, d)
     dxn .* bn.si .+ (2.0 / m) .* dvar .* bn.xc .+ dmu ./ m
 end
 
-# ── Network ─────────────────────────────────────────────────────────────────────
 mutable struct Net
     layers::Vector{Dense}
     bns::Vector{BN}
@@ -199,7 +178,6 @@ function adam_step!(n::Net, lr, t; β1=0.9, β2=0.999, ε=1e-8)
     end
 end
 
-# ── Utilities ───────────────────────────────────────────────────────────────────
 function onehot(y)
     oh = zeros(2, length(y))
     for (i, v) in enumerate(y)
@@ -252,7 +230,6 @@ function evaluate(net, X, y)
      cm=(tp=tp, fp=fp, fn=fn, tn=tn))
 end
 
-# ── Feature Selection ───────────────────────────────────────────────────────────
 function select_top_features(X, y, k)
     nf = size(X, 1)
     cors = zeros(nf)
@@ -276,7 +253,6 @@ function select_top_features(X, y, k)
     sort(top_idx)
 end
 
-# ── Data Loading ────────────────────────────────────────────────────────────────
 function load_data()
     println("=" ^ 70)
     println("  JULIA ML PIPELINE — Deep Neural Network (From Scratch)")
@@ -295,13 +271,11 @@ function load_data()
 
     println("   Original: $(size(X_train, 1)) features × $(size(X_train, 2)) train / $(size(X_test, 2)) test")
 
-    # Feature selection
     sel = select_top_features(X_train, y_train, TOP_K)
     X_train = X_train[sel, :]
     X_test = X_test[sel, :]
     println("   Reduced to $(length(sel)) features")
 
-    # Standardize
     μ = mean(X_train, dims=2)
     σ = std(X_train, dims=2)
     σ[σ .== 0] .= 1.0
@@ -314,7 +288,6 @@ function load_data()
     X_train, y_train, X_test, y_test
 end
 
-# ── Training Loop ───────────────────────────────────────────────────────────────
 function train!(net, X_train, y_train, X_test, y_test)
     n_params = sum(length(l.W) + length(l.b) for l in net.layers) +
                sum(length(bn.γ) + length(bn.β) for bn in net.bns)
@@ -337,7 +310,6 @@ function train!(net, X_train, y_train, X_test, y_test)
     n = size(X_train, 2)
     t0 = now()
 
-    # Checkpoint storage
     best_weights = nothing
 
     history = Dict{String,Vector{Float64}}(
@@ -346,13 +318,11 @@ function train!(net, X_train, y_train, X_test, y_test)
     )
 
     for epoch in 1:EPOCHS
-        # Cosine annealing with warm restarts (T=100)
         T = 100
         lr = INIT_LR * 0.5 * (1 + cos(π * ((epoch - 1) % T) / T))
 
         set_mode!(net, true)
 
-        # Mini-batch SGD with shuffled data
         perm = randperm(n)
         for start in 1:BATCH_SIZE:n
             global_step += 1
@@ -367,7 +337,6 @@ function train!(net, X_train, y_train, X_test, y_test)
             adam_step!(net, lr, global_step)
         end
 
-        # Evaluate every epoch
         test_m = evaluate(net, X_test, y_test)
         train_m = evaluate(net, X_train, y_train)
 
@@ -378,14 +347,12 @@ function train!(net, X_train, y_train, X_test, y_test)
         push!(history["train_loss"], train_m.loss)
         push!(history["train_acc"], train_m.acc)
 
-        # Checkpoint on best test accuracy
         if test_m.acc > best_acc + 1e-4
             best_acc = test_m.acc
             best_epoch = epoch
             best_weights = [(copy(l.W), copy(l.b)) for l in net.layers]
         end
 
-        # Early stopping on test loss
         if test_m.loss < best_loss - 1e-4
             best_loss = test_m.loss
             patience_ctr = 0
@@ -393,7 +360,6 @@ function train!(net, X_train, y_train, X_test, y_test)
             patience_ctr += 1
         end
 
-        # Print progress
         if epoch == 1 || epoch % 20 == 0 || patience_ctr >= PATIENCE || epoch == EPOCHS
             elapsed = Dates.value(now() - t0) / 1000
             @printf("  Ep %3d │ TrL %.4f TrA %5.1f%% │ TeL %.4f TeA %5.1f%% │ F1 %.3f │ AUC %.3f │ Pr %.1f%% │ LR %.1e │ ⏱%.1fs\n",
@@ -402,7 +368,6 @@ function train!(net, X_train, y_train, X_test, y_test)
                     test_m.f1, test_m.auc, test_m.prec * 100, lr, elapsed)
         end
 
-        # Stop if we've hit our targets
         if test_m.acc >= 0.97 && test_m.prec >= 0.96 && test_m.auc >= 0.95
             println("\n   TARGET METRICS ACHIEVED at epoch $(epoch)!")
             best_acc = test_m.acc
@@ -417,7 +382,6 @@ function train!(net, X_train, y_train, X_test, y_test)
         end
     end
 
-    # Restore best weights
     if best_weights !== nothing
         for (i, (W, b)) in enumerate(best_weights)
             net.layers[i].W .= W
@@ -431,7 +395,6 @@ function train!(net, X_train, y_train, X_test, y_test)
     history
 end
 
-# ── Final Report ────────────────────────────────────────────────────────────────
 function final_report!(net, X_test, y_test, history)
     println("\n" * "=" ^ 70)
     println("  FINAL EVALUATION ON TEST SET")
@@ -458,7 +421,6 @@ function final_report!(net, X_test, y_test, history)
     @printf("  │ True: 1  │  %4d    │  %4d    │\n", c.fn, c.tp)
     println("  └──────────┴──────────┴──────────┘")
 
-    # Training summary
     best_idx = argmin(history["loss"])
     println("\n   Training Summary:")
     @printf("     Best test loss: %.4f at epoch %d\n", history["loss"][best_idx], best_idx)
@@ -469,13 +431,11 @@ function final_report!(net, X_test, y_test, history)
     @printf("     Best AUC:       %.4f at epoch %d\n",
             maximum(history["auc"]), argmax(history["auc"]))
 
-    # Target check
     println("\n   Target Check:")
     println("     Accuracy ≥ 96%:   $(m.acc >= 0.96 ? " PASS" : " FAIL") ($(round(m.acc*100, digits=2))%)")
     println("     Precision ≥ 95%:  $(m.prec >= 0.95 ? " PASS" : " FAIL") ($(round(m.prec*100, digits=2))%)")
     println("     AUC ≥ 0.9:        $(m.auc >= 0.9 ? " PASS" : " FAIL") ($(round(m.auc, digits=4)))")
 
-    # Save results
     mkpath(joinpath(PROJECT_DIR, "results"))
 
     open(joinpath(PROJECT_DIR, "results", "evaluation_results.txt"), "w") do io
@@ -508,14 +468,12 @@ function final_report!(net, X_test, y_test, history)
     m
 end
 
-# ── Main ────────────────────────────────────────────────────────────────────────
 function main()
     println("\n Julia ML Pipeline — $(now())\n")
 
     X_train, y_train, X_test, y_test = load_data()
     nf = size(X_train, 1)
 
-    # Deeper, wider architecture for stronger signal
     net = Net([nf, 256, 128, 64, 32, 2])
 
     history = train!(net, X_train, y_train, X_test, y_test)

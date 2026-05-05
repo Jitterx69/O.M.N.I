@@ -1,43 +1,14 @@
-#=
-================================================================================
-   NEUROEVOLUTION — Genetic Algorithm Architecture Search
-  ==========================================================
-  Evolves optimal neural network architectures using a from-scratch
-  genetic algorithm. Zero external dependencies.
-
-  Genome encodes:
-    • Number of hidden layers (1–5)
-    • Width of each hidden layer (16–512)
-    • Dropout rate (0.05–0.6)
-    • Learning rate (1e-5 – 5e-3)
-    • L2 regularization (1e-6 – 1e-2)
-
-  GA operators:
-    • Tournament selection (size 3)
-    • Uniform crossover with layer-swap
-    • Gaussian mutation (widths, hyperparams, add/remove layers)
-    • Elitism (top 2 survive unchanged)
-
-  Fitness: best test accuracy after short training (configurable epochs)
-
-  Usage:
-    julia neuroevolution.jl
-================================================================================
-=#
-
 include("../core.jl")
 
-# ─── GA Configuration ──────────────────────────────────────────────────────────
-const POP_SIZE = 20           # Population size
-const N_GENERATIONS = 10      # Number of evolutionary generations
-const TOURNAMENT_SIZE = 3     # Tournament selection pressure
-const ELITE_COUNT = 2         # Elitism: top N survive unchanged
-const MUTATION_RATE = 0.3     # Probability of mutating each gene
-const CROSSOVER_RATE = 0.7    # Probability of crossover vs cloning
-const FITNESS_EPOCHS = 20     # Epochs to train each candidate
-const FITNESS_BATCH = 32      # Batch size for fitness evaluation
+const POP_SIZE = 20
+const N_GENERATIONS = 10
+const TOURNAMENT_SIZE = 3
+const ELITE_COUNT = 2
+const MUTATION_RATE = 0.3
+const CROSSOVER_RATE = 0.7
+const FITNESS_EPOCHS = 20
+const FITNESS_BATCH = 32
 
-# Genome bounds
 const MIN_LAYERS = 1
 const MAX_LAYERS = 5
 const MIN_WIDTH = 16
@@ -49,22 +20,20 @@ const MAX_LR = 5e-3
 const MIN_L2 = 1e-6
 const MAX_L2 = 1e-2
 
-# ─── Genome ─────────────────────────────────────────────────────────────────────
 mutable struct Genome
-    hidden_widths::Vector{Int}    # widths of hidden layers
-    dropout::Float64              # dropout rate
-    lr::Float64                   # learning rate
-    l2::Float64                   # L2 regularization
-    fitness::Float64              # best test accuracy
+    hidden_widths::Vector{Int}
+    dropout::Float64
+    lr::Float64
+    l2::Float64
+    fitness::Float64
     final_acc::Float64
     final_f1::Float64
     final_auc::Float64
-    generation::Int               # born in which generation
+    generation::Int
 end
 
 function random_genome(gen::Int)
     n_layers = rand(MIN_LAYERS:MAX_LAYERS)
-    # Generate widths that generally decrease (funnel shape)
     max_w = rand(64:MAX_WIDTH)
     widths = Int[]
     for i in 1:n_layers
@@ -72,10 +41,10 @@ function random_genome(gen::Int)
         w = clamp(w, MIN_WIDTH, MAX_WIDTH)
         push!(widths, w)
     end
-    sort!(widths, rev=true)  # wider layers first
+    sort!(widths, rev=true)
 
     dropout = clamp(rand() * (MAX_DROPOUT - MIN_DROPOUT) + MIN_DROPOUT, MIN_DROPOUT, MAX_DROPOUT)
-    lr = exp(log(MIN_LR) + rand() * (log(MAX_LR) - log(MIN_LR)))  # log-uniform
+    lr = exp(log(MIN_LR) + rand() * (log(MAX_LR) - log(MIN_LR)))
     l2 = exp(log(MIN_L2) + rand() * (log(MAX_L2) - log(MIN_L2)))
 
     Genome(widths, dropout, lr, l2, 0.0, 0.0, 0.0, 0.0, gen)
@@ -94,15 +63,14 @@ function genome_params(g::Genome, input_dim::Int)
     sizes = genome_to_sizes(g, input_dim)
     total = 0
     for i in 1:length(sizes)-1
-        total += sizes[i] * sizes[i+1] + sizes[i+1]  # Dense W + b
+        total += sizes[i] * sizes[i+1] + sizes[i+1]
         if i < length(sizes) - 1
-            total += 2 * sizes[i+1]  # BN γ + β
+            total += 2 * sizes[i+1]
         end
     end
     total
 end
 
-# ─── Fitness Evaluation ────────────────────────────────────────────────────────
 function evaluate_fitness!(g::Genome, X_train, y_train, X_test, y_test, input_dim)
     sizes = genome_to_sizes(g, input_dim)
     net = Net(sizes; drop=g.dropout)
@@ -118,13 +86,11 @@ function evaluate_fitness!(g::Genome, X_train, y_train, X_test, y_test, input_di
     return g.fitness
 end
 
-# ─── Selection: Tournament ──────────────────────────────────────────────────────
 function tournament_select(population::Vector{Genome})
     candidates = rand(population, TOURNAMENT_SIZE)
     return deepcopy(candidates[argmax([c.fitness for c in candidates])])
 end
 
-# ─── Crossover: Uniform with Layer Swap ─────────────────────────────────────────
 function crossover(p1::Genome, p2::Genome, gen::Int)
     if rand() > CROSSOVER_RATE
         child = deepcopy(rand() < 0.5 ? p1 : p2)
@@ -132,7 +98,6 @@ function crossover(p1::Genome, p2::Genome, gen::Int)
         return child
     end
 
-    # Crossover hidden widths
     max_len = max(length(p1.hidden_widths), length(p2.hidden_widths))
     child_widths = Int[]
     for i in 1:max_len
@@ -150,7 +115,6 @@ function crossover(p1::Genome, p2::Genome, gen::Int)
     end
     sort!(child_widths, rev=true)
 
-    # Crossover hyperparameters
     dropout = rand() < 0.5 ? p1.dropout : p2.dropout
     lr = rand() < 0.5 ? p1.lr : p2.lr
     l2 = rand() < 0.5 ? p1.l2 : p2.l2
@@ -158,13 +122,10 @@ function crossover(p1::Genome, p2::Genome, gen::Int)
     Genome(child_widths, dropout, lr, l2, 0.0, 0.0, 0.0, 0.0, gen)
 end
 
-# ─── Mutation ───────────────────────────────────────────────────────────────────
 function mutate!(g::Genome)
-    # Mutate layer widths
     if rand() < MUTATION_RATE
         for i in eachindex(g.hidden_widths)
             if rand() < 0.4
-                # Scale by ±30%
                 factor = 1.0 + randn() * 0.3
                 g.hidden_widths[i] = clamp(round(Int, g.hidden_widths[i] * factor), MIN_WIDTH, MAX_WIDTH)
             end
@@ -172,38 +133,31 @@ function mutate!(g::Genome)
         sort!(g.hidden_widths, rev=true)
     end
 
-    # Add or remove a layer
     if rand() < MUTATION_RATE * 0.5
         if rand() < 0.5 && length(g.hidden_widths) < MAX_LAYERS
-            # Add a layer
             new_w = clamp(round(Int, minimum(g.hidden_widths) * rand(0.5:0.1:1.0)), MIN_WIDTH, MAX_WIDTH)
             push!(g.hidden_widths, new_w)
             sort!(g.hidden_widths, rev=true)
         elseif length(g.hidden_widths) > MIN_LAYERS
-            # Remove the smallest layer
             deleteat!(g.hidden_widths, argmin(g.hidden_widths))
         end
     end
 
-    # Mutate dropout
     if rand() < MUTATION_RATE
         g.dropout = clamp(g.dropout + randn() * 0.1, MIN_DROPOUT, MAX_DROPOUT)
     end
 
-    # Mutate learning rate (log-space)
     if rand() < MUTATION_RATE
         g.lr = clamp(g.lr * exp(randn() * 0.5), MIN_LR, MAX_LR)
     end
 
-    # Mutate L2 (log-space)
     if rand() < MUTATION_RATE
         g.l2 = clamp(g.l2 * exp(randn() * 0.5), MIN_L2, MAX_L2)
     end
 
-    g.fitness = 0.0  # reset fitness after mutation
+    g.fitness = 0.0
 end
 
-# ─── Pretty Printing ───────────────────────────────────────────────────────────
 function print_header()
     println()
     println("╔" * "═"^78 * "╗")
@@ -263,11 +217,9 @@ function print_genome_detail(g::Genome, input_dim::Int, label::String)
     println("  Born:           Generation $(g.generation)")
 end
 
-# ─── Main Evolution Loop ───────────────────────────────────────────────────────
 function evolve()
     print_header()
 
-    # Load data
     println("\n Loading and preparing data...")
     X_train, y_train, X_test, y_test = load_data(; top_k=300, verbose=true)
     input_dim = size(X_train, 1)
@@ -283,18 +235,15 @@ function evolve()
 
     t0 = now()
 
-    # ── Initialize population ───────────────────────────────────────────────
     println("\n Initializing population of $POP_SIZE random architectures...")
     population = [random_genome(0) for _ in 1:POP_SIZE]
 
-    # Track all-time best
     all_time_best = nothing
     generation_bests = Genome[]
 
     for gen in 0:N_GENERATIONS
         gen_start = now()
 
-        # ── Evaluate fitness ────────────────────────────────────────────────
         if gen == 0
             println("\n Evaluating initial population...")
         else
@@ -303,27 +252,24 @@ function evolve()
 
         n_eval = 0
         for (i, g) in enumerate(population)
-            if g.fitness == 0.0  # not yet evaluated
+            if g.fitness == 0.0
                 n_eval += 1
                 try
                     evaluate_fitness!(g, X_train, y_train, X_test, y_test, input_dim)
                 catch e
-                    # If architecture fails (e.g., dim mismatch), assign 0 fitness
                     g.fitness = 0.0
                     g.final_acc = 0.0
                     g.final_f1 = 0.0
                     g.final_auc = 0.0
                 end
 
-                # Progress indicator
                 if n_eval % 5 == 0 || n_eval == count(g->g.fitness == 0.0, population) || i == length(population)
                     @printf("   Evaluated %d/%d candidates...\r", i, length(population))
                 end
             end
         end
-        println()  # clear progress line
+        println()
 
-        # ── Track best ──────────────────────────────────────────────────────
         gen_best = sort(population, by=g->g.fitness, rev=true)[1]
         push!(generation_bests, deepcopy(gen_best))
 
@@ -331,26 +277,21 @@ function evolve()
             all_time_best = deepcopy(gen_best)
         end
 
-        # ── Display ─────────────────────────────────────────────────────────
         gen_elapsed = Dates.value(now() - gen_start) / 1000
         print_population(population, gen, input_dim)
         @printf("   ⏱ Generation time: %.1fs\n", gen_elapsed)
 
-        # Stop after last generation (don't create offspring)
         gen >= N_GENERATIONS && break
 
-        # ── Create next generation ──────────────────────────────────────────
         sort!(population, by=g->g.fitness, rev=true)
 
         new_pop = Genome[]
 
-        # Elitism: carry over top individuals unchanged
         for i in 1:min(ELITE_COUNT, length(population))
             elite = deepcopy(population[i])
             push!(new_pop, elite)
         end
 
-        # Fill rest with offspring
         while length(new_pop) < POP_SIZE
             parent1 = tournament_select(population)
             parent2 = tournament_select(population)
@@ -364,7 +305,6 @@ function evolve()
 
     total_time = Dates.value(now() - t0) / 1000
 
-    # ── Final Results ───────────────────────────────────────────────────────
     println()
     println("╔" * "═"^78 * "╗")
     println("║" * " "^20 * " EVOLUTION COMPLETE" * " "^38 * "║")
@@ -372,7 +312,6 @@ function evolve()
 
     print_genome_detail(all_time_best, input_dim, " ALL-TIME BEST ARCHITECTURE")
 
-    # Show evolution progress
     println("\n   Evolution Progress:")
     println("  " * "─"^60)
     for (i, g) in enumerate(generation_bests)
@@ -384,7 +323,6 @@ function evolve()
     @printf("\n  ⏱  Total evolution time: %.1fs\n", total_time)
     @printf("   Architectures evaluated: ~%d\n", POP_SIZE + (N_GENERATIONS * (POP_SIZE - ELITE_COUNT)))
 
-    # ── Full training of best architecture ──────────────────────────────────
     println("\n" * "="^78)
     println("   FULL TRAINING — Best Evolved Architecture")
     println("="^78)
@@ -427,7 +365,6 @@ function evolve()
         end
     end
 
-    # Restore best
     if best_weights !== nothing
         for (i, (W, b)) in enumerate(best_weights)
             best_net.layers[i].W .= W
@@ -455,7 +392,6 @@ function evolve()
     @printf("  │ True: 1  │  %4d    │  %4d    │\n", c.fn, c.tp)
     println("  └──────────┴──────────┴──────────┘")
 
-    # Save results
     mkpath(joinpath(CORE_PROJECT_DIR, "results"))
     open(joinpath(CORE_PROJECT_DIR, "results", "neuroevolution_results.txt"), "w") do io
         println(io, "Neuroevolution Results — $(now())")
@@ -489,5 +425,4 @@ function evolve()
     return all_time_best, best_net, final_m
 end
 
-# Run
 evolve()
