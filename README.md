@@ -62,21 +62,27 @@ To address the aforementioned problems, Project O.M.N.I. incorporates a suite of
 ### 6.1 Kolmogorov-Arnold Networks (KANs)
 **Objective:** Resolve parameter inefficiency and topological rigidity.
 **Theoretical Context:** Based on the Kolmogorov-Arnold representation theorem (1957), which posits that any multivariate continuous function can be represented as a superposition of continuous functions of a single variable. In 2024, this theorem was weaponized for deep learning by inverting the standard Multi-Layer Perceptron (MLP) structure.
-**Methodology:** In a classical MLP, nodes possess fixed activation functions and edges possess linear scalar weights. In the O.M.N.I. KAN implementation, nodes simply sum their inputs, and the *edges* contain learnable, continuous non-linear functions. We parameterized these edge functions utilizing orthogonal Chebyshev polynomials of the first kind ($T_k(x)$), coupled with a Sigmoid Linear Unit (SiLU) base activation:
+**Methodology:** In a classical MLP, nodes possess fixed activation functions and edges possess linear scalar weights. In the O.M.N.I. KAN implementation, nodes simply sum their inputs, and the *edges* contain learnable, continuous non-linear functions. We parameterized these edge functions utilizing orthogonal Chebyshev polynomials of the first kind (`T_k(x)`), coupled with a Sigmoid Linear Unit (SiLU) base activation:
 
-$$ \phi_{i,j}(x) = W_{base} \cdot \text{SiLU}(x) + \sum_{k=0}^{D} C_{i,j,k} T_k(\tanh(x)) $$
+```math
+\phi_{i,j}(x) = W_{base} \cdot \text{SiLU}(x) + \sum_{k=0}^{D} C_{i,j,k} T_k(\tanh(x))
+```
 
 The manual backward pass requires computing the recursive derivative of the orthogonal polynomials:
-$$ T'_k(x) = 2 T_{k-1}(x) + 2x T'_{k-1}(x) - T'_{k-2}(x) $$
+```math
+T'_k(x) = 2 T_{k-1}(x) + 2x T'_{k-1}(x) - T'_{k-2}(x)
+```
 
 **Result:** The standard dense architecture required 141,217 parameters to model the dataset. The Chebyshev KAN modeled the exact same manifold utilizing a 100 -> 8 -> 2 architecture consisting of merely 4,896 parameters—a 96.5% reduction in computational complexity—while maintaining an instantaneous convergence to 97.0% validation accuracy.
 
 ### 6.2 Continuous-Depth Neural Ordinary Differential Equations
 **Objective:** Abstract neural depth into a continuous temporal dynamic to further optimize parameter efficiency.
-**Theoretical Context:** Drawing upon the foundational work by Chen et al. (2018), standard residual networks (ResNets) can be viewed as discrete Euler approximations of continuous transformations: $h_{t+1} = h_t + f(h_t, \theta)$. 
-**Methodology:** O.M.N.I. abandons discrete layers entirely, replacing the hidden state with a continuous trajectory over arbitrary depth (modeled as time $t$), governed by the differential equation:
+**Theoretical Context:** Drawing upon the foundational work by Chen et al. (2018), standard residual networks (ResNets) can be viewed as discrete Euler approximations of continuous transformations: `h_{t+1} = h_t + f(h_t, \theta)`. 
+**Methodology:** O.M.N.I. abandons discrete layers entirely, replacing the hidden state with a continuous trajectory over arbitrary depth (modeled as time `t`), governed by the differential equation:
 
-$$ \frac{dh(t)}{dt} = \tanh(W_h \cdot h(t) + W_t \cdot t + b) $$
+```math
+\frac{dh(t)}{dt} = \tanh(W_h \cdot h(t) + W_t \cdot t + b)
+```
 
 To evaluate the network, the input data undergoes numerical integration utilizing a custom Explicit Euler solver over defined continuous steps. Due to the strict zero-dependency constraint, the continuous Adjoint Sensitivity Method was eschewed in favor of a mathematically exact, discretize-then-optimize manual backpropagation. The chain rule is propagated directly backward through the iterative numerical solver steps.
 **Result:** Utilizing a 16-dimensional continuous latent space evaluated over 10 integration steps, the model achieved 96.5% validation accuracy with only 5,138 parameters.
@@ -84,18 +90,22 @@ To evaluate the network, the input data undergoes numerical integration utilizin
 ### 6.3 Bayesian Uncertainty Quantification via Stochastic Regularization
 **Objective:** Resolve deterministic overconfidence and implement risk stratification.
 **Theoretical Context:** Neural networks must express "I don't know" when processing anomalous data. O.M.N.I. approximates variational inference in Bayesian Neural Networks utilizing Monte Carlo (MC) Dropout (Gal & Ghahramani, 2016).
-**Methodology:** By enforcing stochastic dropout during the inference phase, the network performs $M$ parallel forward passes, generating a distribution of predictions rather than a scalar point estimate. The module calculates the predictive mean and isolates two critical variance components:
+**Methodology:** By enforcing stochastic dropout during the inference phase, the network performs `M` parallel forward passes, generating a distribution of predictions rather than a scalar point estimate. The module calculates the predictive mean and isolates two critical variance components:
 1. **Aleatoric Uncertainty:** Data-inherent noise.
 2. **Epistemic Uncertainty:** Model ignorance.
 
 Information theoretical metrics are subsequently extracted, specifically the Shannon Entropy of the predictive distribution:
-$$ H(Y|X) = - \sum_{y \in Y} P(y|X) \log_2 P(y|X) $$
+```math
+H(Y|X) = - \sum_{y \in Y} P(y|X) \log_2 P(y|X)
+```
 **Result:** The Bayesian engine successfully calculates 95% Confidence Intervals for every prediction. Empirical validation proved that predictions stratified automatically into the "High Confidence" category maintained 96.8% accuracy, while the engine correctly isolated "Low Confidence" distributions that correlated with 0.0% accuracy, providing a mathematically sound trigger for human-in-the-loop intervention.
 
 ### 6.4 Data-Driven Magnitude Pruning and Compression
 **Objective:** Eliminate structural redundancy and optimize memory allocation.
-**Methodology:** The system tracks the absolute $L_1$-Norm of all nodal activations across the entire dataset distribution to objectively quantify neuron utility:
-$$ I_j = \frac{1}{N} \sum_{i=1}^{N} | \text{LeakyReLU}(z_{i,j}) | $$
+**Methodology:** The system tracks the absolute `L_1`-Norm of all nodal activations across the entire dataset distribution to objectively quantify neuron utility:
+```math
+I_j = \frac{1}{N} \sum_{i=1}^{N} | \text{LeakyReLU}(z_{i,j}) |
+```
 Unlike simplistic masking matrices that merely zero-out weights (failing to recover memory or compute cycles), O.M.N.I. executes an Iterative Magnitude Pruning (IMP) protocol that *physically* reallocates and shrinks the underlying dense weight matrices, bias vectors, and Adam optimizer momentum buffers. 
 **Result:** A massive baseline architecture was algorithmically compressed by 80.1% (from 141K down to 28K parameters). Following a reduced-learning-rate dynamic healing phase, the pruned network achieved a paradoxical +1.5% improvement in generalization capability.
 
@@ -109,7 +119,9 @@ Unlike simplistic masking matrices that merely zero-out weights (failing to reco
 **Methodology:** O.M.N.I. synthesizes two distinct analytical approaches to rank feature importance:
 1. **Permutation Importance:** A combinatorial metric evaluating the degradation of predictive power when individual feature vectors are randomly shuffled.
 2. **Gradient-Based Saliency:** An analytical sensitivity derivation performing a complete manual backward pass from the predicted class to the input layer in inference mode, evaluating the absolute partial derivative matrices:
-$$ S_i = \mathbb{E} \left| \frac{\partial y}{\partial x_i} \right| $$
+```math
+S_i = \mathbb{E} \left| \frac{\partial y}{\partial x_i} \right|
+```
 **Result:** The integrated normalized metric isolates the critical structural drivers of the latent representation, exporting the data to comprehensive combinatorial ranking matrices.
 
 ---
