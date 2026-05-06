@@ -96,38 +96,110 @@ function bwd!(sb::StochasticBottleneck, dz::Matrix{Float64}, β::Float64, λ::Fl
     sb.W_mu' * dmu .+ sb.W_lv' * dlv
 end
 
-mutable struct IBNet
-    encoder::Dense
+mutable struct ResDense
+    ni::Int; no::Int
+    W::Matrix{Float64}; b::Vector{Float64}
+    dW::Matrix{Float64}; db::Vector{Float64}
+    mW::Matrix{Float64}; vW::Matrix{Float64}
+    mb::Vector{Float64}; vb::Vector{Float64}
+    inp::Matrix{Float64}
+end
+
+function ResDense(ni, no)
+    ResDense(ni, no,
+        randn(no, ni) .* sqrt(2.0 / ni), zeros(no),
+        zeros(no, ni), zeros(no),
+        zeros(no, ni), zeros(no, ni),
+        zeros(no), zeros(no),
+        zeros(0, 0))
+end
+
+function fwd!(l::ResDense, X::Matrix{Float64})
+    l.inp = X
+    out = l.W * X .+ l.b
+    if size(X, 1) == size(out, 1)
+        return lrelu.(out .+ X)
+    else
+        return lrelu.(out)
+    end
+end
+
+function bwd!(l::ResDense, d::Matrix{Float64}, λ::Float64, clip::Float64=1.0)
+    B = size(d, 2)
+    pre_act = l.W * l.inp .+ l.b
+    if size(l.inp, 1) == size(pre_act, 1)
+        dz = d .* lrelu_d.(pre_act .+ l.inp)
+    else
+        dz = d .* lrelu_d.(pre_act)
+    end
+
+    l.dW = dz * l.inp' ./ B .+ λ .* l.W
+    l.db = vec(sum(dz, dims=2)) ./ B
+
+    gnorm = sqrt(sum(l.dW.^2) + sum(l.db.^2))
+    if gnorm > clip
+        s = clip / gnorm; l.dW .*= s; l.db .*= s
+    end
+
+    dx = l.W' * dz
+    if size(l.inp, 1) == size(pre_act, 1)
+        return dx .+ dz
+    else
+        return dx
+    end
+end
+
+mutable struct ResIBNet
+    encoder::Vector{ResDense}
     bottleneck::StochasticBottleneck
     classifier::Dense
     training::Bool
 end
 
-function IBNet(in_dim::Int, h_dim::Int, z_dim::Int, out_dim::Int)
-    IBNet(Dense(in_dim, h_dim), StochasticBottleneck(h_dim, z_dim), Dense(z_dim, out_dim), true)
+function ResIBNet(in_dim::Int, h_dims::Vector{Int}, z_dim::Int, out_dim::Int)
+    encoder = ResDense[]
+    prev = in_dim
+    for h in h_dims
+        push!(encoder, ResDense(prev, h))
+        prev = h
+    end
+    ResIBNet(encoder, StochasticBottleneck(prev, z_dim), Dense(z_dim, out_dim), true)
 end
 
-function set_mode!(n::IBNet, training::Bool)
+function set_mode!(n::ResIBNet, training::Bool)
     n.training = training
 end
 
-function forward!(net::IBNet, X::Matrix{Float64})
-    h = lrelu.(fwd!(net.encoder, X))
+function forward!(net::ResIBNet, X::Matrix{Float64})
+    h = X
+    for l in net.encoder
+        h = fwd!(l, h)
+    end
     z = fwd!(net.bottleneck, h; training=net.training)
     softmax_c(fwd!(net.classifier, z))
 end
 
-function backward!(net::IBNet, y_oh, y_pred, β; l2=1e-4, clip=1.0)
+function backward!(net::ResIBNet, y_oh, y_pred, β; l2=1e-4, clip=1.0)
     d = y_pred .- y_oh
     dz = bwd!(net.classifier, d, l2, clip)
     dh = bwd!(net.bottleneck, dz, β, l2, clip)
-    dh = dh .* lrelu_d.(net.encoder.W * net.encoder.inp .+ net.encoder.b)
-    bwd!(net.encoder, dh, l2, clip)
+    for i in length(net.encoder):-1:1
+        dh = bwd!(net.encoder[i], dh, l2, clip)
+    end
 end
 
-function adam_step!(net::IBNet, lr, t; β1=0.9, β2=0.999, ε=1e-8)
+function adam_step!(net::ResIBNet, lr, t; β1=0.9, β2=0.999, ε=1e-8)
     bc1 = 1.0 - β1^t
     bc2 = 1.0 - β2^t
+
+    function update_res!(l::ResDense)
+        @. l.mW = β1 * l.mW + (1-β1) * l.dW
+        @. l.vW = β2 * l.vW + (1-β2) * l.dW^2
+        @. l.mb = β1 * l.mb + (1-β1) * l.db
+        @. l.vb = β2 * l.vb + (1-β2) * l.db^2
+        @. l.W -= lr * (l.mW/bc1) / (sqrt(l.vW/bc2) + ε)
+        @. l.b -= lr * (l.mb/bc1) / (sqrt(l.vb/bc2) + ε)
+    end
 
     function update_dense!(l::Dense)
         @. l.mW = β1 * l.mW + (1-β1) * l.dW
@@ -138,34 +210,33 @@ function adam_step!(net::IBNet, lr, t; β1=0.9, β2=0.999, ε=1e-8)
         @. l.b -= lr * (l.mb/bc1) / (sqrt(l.vb/bc2) + ε)
     end
 
-    update_dense!(net.encoder)
+    for l in net.encoder; update_res!(l); end
     update_dense!(net.classifier)
 
     sb = net.bottleneck
     @. sb.mW_mu = β1 * sb.mW_mu + (1-β1) * sb.dW_mu
     @. sb.vW_mu = β2 * sb.vW_mu + (1-β2) * sb.dW_mu^2
     @. sb.W_mu -= lr * (sb.mW_mu/bc1) / (sqrt(sb.vW_mu/bc2) + ε)
-
     @. sb.mb_mu = β1 * sb.mb_mu + (1-β1) * sb.db_mu
     @. sb.vb_mu = β2 * sb.vb_mu + (1-β2) * sb.db_mu^2
     @. sb.b_mu -= lr * (sb.mb_mu/bc1) / (sqrt(sb.vb_mu/bc2) + ε)
-
     @. sb.mW_lv = β1 * sb.mW_lv + (1-β1) * sb.dW_lv
     @. sb.vW_lv = β2 * sb.vW_lv + (1-β2) * sb.dW_lv^2
     @. sb.W_lv -= lr * (sb.mW_lv/bc1) / (sqrt(sb.vW_lv/bc2) + ε)
-
     @. sb.mb_lv = β1 * sb.mb_lv + (1-β1) * sb.db_lv
     @. sb.vb_lv = β2 * sb.vb_lv + (1-β2) * sb.db_lv^2
     @. sb.b_lv -= lr * (sb.mb_lv/bc1) / (sqrt(sb.vb_lv/bc2) + ε)
 end
 
-function count_params(net::IBNet)
-    length(net.encoder.W) + length(net.encoder.b) +
-    count_bottleneck_params(net.bottleneck) +
-    length(net.classifier.W) + length(net.classifier.b)
+function count_params(net::ResIBNet)
+    c = 0
+    for l in net.encoder; c += length(l.W) + length(l.b); end
+    c += count_bottleneck_params(net.bottleneck)
+    c += length(net.classifier.W) + length(net.classifier.b)
+    return c
 end
 
-function evaluate(net::IBNet, X, y)
+function evaluate(net::ResIBNet, X, y)
     set_mode!(net, false)
     ŷ = forward!(net, X)
     preds = [argmax(ŷ[:, i]) - 1 for i in 1:size(ŷ, 2)]
@@ -185,9 +256,10 @@ function evaluate(net::IBNet, X, y)
      cm=(tp=tp, fp=fp, fn=fn, tn=tn))
 end
 
-function analyze_bottleneck(net::IBNet, X::Matrix{Float64})
+function analyze_bottleneck(net::ResIBNet, X::Matrix{Float64})
     set_mode!(net, true)
-    h = lrelu.(fwd!(net.encoder, X))
+    h = X
+    for l in net.encoder; h = fwd!(l, h); end
     fwd!(net.bottleneck, h; training=true)
 
     kl_dims = kl_per_dimension(net.bottleneck)
