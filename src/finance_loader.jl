@@ -3,6 +3,23 @@ using Statistics, Random, Printf, Dates
 const FINANCE_PROJECT_DIR = dirname(@__DIR__)
 const FINANCE_DATA_PATH = joinpath(FINANCE_PROJECT_DIR, "data", "finance", "market_data.csv")
 
+# Fractional Differentiation helper (Fixed Window Method)
+function fractional_diff(x::Vector{Float64}, d::Float64, threshold::Float64=1e-4)
+    w = [1.0]
+    for k in 1:100 # Window size for weights
+        push!(w, -w[end] * (d - k + 1) / k)
+        if abs(w[end]) < threshold; break; end
+    end
+    
+    n = length(x)
+    nw = length(w)
+    res = zeros(n)
+    for i in nw:n
+        res[i] = sum(w .* x[i:-1:i-nw+1])
+    end
+    return res[nw:end]
+end
+
 mutable struct FinanceLoader
     data::Matrix{Float64}
     dates::Vector{Date}
@@ -45,16 +62,40 @@ function load_finance_data(path::String)
         end
     end
     
-    # Convert to Log Returns: log(P_t / P_{t-1})
-    returns = diff(log.(max.(data_mat, 1e-6)), dims=1)
-    valid_dates = dates[2:end]
+    # Fractional Differentiation (d=0.4 preserves memory)
+    n_assets = size(data_mat, 2)
+    frac_cols = []
+    for j in 1:n_assets
+        # FracDiff on log prices
+        push!(frac_cols, fractional_diff(log.(max.(data_mat[:, j], 1e-6)), 0.4))
+    end
+    
+    # Trim dates and data to match frac_diff delay
+    min_len = minimum(length.(frac_cols))
+    data_mat = hcat([c[end-min_len+1:end] for c in frac_cols]...)
+    valid_dates = dates[end-min_len+1:end]
+    
+    # Feature Engineering: Add 5-day Volatility and 5-day Momentum
+    n_rows, n_assets = size(data_mat)
+    vol = zeros(n_rows, n_assets)
+    mom = zeros(n_rows, n_assets)
+    
+    for j in 1:n_assets
+        for i in 6:n_rows
+            vol[i, j] = std(data_mat[i-5:i, j])
+            mom[i, j] = sum(data_mat[i-5:i, j])
+        end
+    end
+    
+    # Concatenate: [FracDiff | Volatility | Momentum]
+    enhanced_data = hcat(data_mat, vol, mom)
     
     # Standardize
-    means = vec(mean(returns, dims=1))
-    stds = vec(std(returns, dims=1))
-    norm_returns = (returns .- means') ./ (stds' .+ 1e-8)
+    means = vec(mean(enhanced_data, dims=1))
+    stds = vec(std(enhanced_data, dims=1))
+    norm_data = (enhanced_data .- means') ./ (stds' .+ 1e-8)
     
-    return FinanceLoader(norm_returns, valid_dates, assets, means, stds)
+    return FinanceLoader(norm_data, valid_dates, assets, means, stds)
 end
 
 function create_windows(loader::FinanceLoader, window_size::Int, target_asset_idx::Int)
