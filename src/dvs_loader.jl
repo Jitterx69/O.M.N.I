@@ -3,6 +3,8 @@ using Statistics, Random, Printf, Dates
 const DVS_PROJECT_DIR = dirname(@__DIR__)
 const DVS_DATA_DIR = joinpath(DVS_PROJECT_DIR, "data", "DVS  Gesture dataset", "DvsGesture")
 const DVS_RES = 128
+const DVS_DOWN = 4
+const DVS_RES_DOWN = div(DVS_RES, DVS_DOWN)
 const DVS_CLASSES = 11
 const DVS_TIME_BINS = 20
 
@@ -103,7 +105,8 @@ function extract_gesture_events(events::Vector{DVSEvent}, t_start::Int64, t_end:
 end
 
 function events_to_voxel_grid(events::Vector{DVSEvent}, n_bins::Int)
-    grid = zeros(Float64, 2 * n_bins * DVS_RES * DVS_RES)
+    R = DVS_RES_DOWN
+    grid = zeros(Float64, 2 * n_bins * R * R)
 
     length(events) == 0 && return grid
 
@@ -113,8 +116,12 @@ function events_to_voxel_grid(events::Vector{DVSEvent}, n_bins::Int)
 
     for e in events
         bin = min(floor(Int, (e.ts - t_min) / dt * n_bins), n_bins - 1)
+        xd = div(e.x, DVS_DOWN)
+        yd = div(e.y, DVS_DOWN)
+        xd = clamp(xd, 0, R - 1)
+        yd = clamp(yd, 0, R - 1)
         ch = e.pol * n_bins + bin
-        idx = ch * DVS_RES * DVS_RES + e.y * DVS_RES + e.x + 1
+        idx = ch * R * R + yd * R + xd + 1
         if idx >= 1 && idx <= length(grid)
             grid[idx] += 1.0
         end
@@ -166,7 +173,7 @@ function load_split(trial_list::Vector{String}, n_bins::Int)
         append!(y_all, y_t)
     end
 
-    feat_dim = 2 * n_bins * DVS_RES * DVS_RES
+    feat_dim = 2 * n_bins * DVS_RES_DOWN * DVS_RES_DOWN
     X = zeros(feat_dim, length(X_all))
     for (i, v) in enumerate(X_all)
         X[:, i] = v
@@ -177,5 +184,5 @@ end
 
 function read_trial_list(path::String)
     lines = readlines(path)
-    return [strip(l) for l in lines if length(strip(l)) > 0]
+    return [String(strip(l)) for l in lines if length(strip(l)) > 0]
 end
