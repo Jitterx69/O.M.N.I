@@ -310,7 +310,7 @@ function run_information_bottleneck()
     BETA_START = 1e-4
     BETA_END = 0.05
 
-    net = IBNet(nf, H_DIM, Z_DIM, 2)
+    net = ResIBNet(nf, [H_DIM], Z_DIM, 2)
     params = count_params(net)
 
     println("\n Architecture: Encoder($nf -> $H_DIM) -> Bottleneck(mu+lv -> $Z_DIM) -> Classifier($Z_DIM -> 2)")
@@ -408,4 +408,4 @@ function run_information_bottleneck()
     println("\n   Results saved to: results/ib_results.txt")
 end
 
-run_information_bottleneck()
+# run_information_bottleneck()

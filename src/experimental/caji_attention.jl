@@ -103,36 +103,38 @@ function bwd_caji!(l::CAJILayer, d_out::Matrix{Float64}, lambda::Float64, clip::
     l.dWo = d_out * l.ctx' ./ B .+ lambda .* l.Wo
     l.dbo = vec(sum(d_out, dims=2)) ./ B
 
-    d_ctx = l.Wo' * d_out
+    d_flat = l.Wo' * d_out
 
     l.dWq .= 0.0; l.dWk .= 0.0; l.dWv .= 0.0
     d_jets = zeros(size(l.jets_inp))
 
     for b in 1:B
         A = reshape(l.attn[:, b], n, n)
-
-        d_ctx_b = reshape(d_ctx[:, b], dk, n)
-
-        d_V_b = A' * d_ctx_b'
-        d_A = d_ctx_b * reshape(l.V[1:dk*n, b:b], dk, n)'
-        d_A = d_A' .* A .* (1.0 .- A)
-
         Q_b = reshape(l.Q[:, b], dk, n)
         K_b = reshape(l.K[:, b], dk, n)
+        V_b = reshape(l.V[:, b], dk, n)
 
-        d_Q_b = K_b * d_A' ./ sqrt(Float64(dk))
-        d_K_b = Q_b * d_A ./ sqrt(Float64(dk))
+        d_ctx_t = reshape(d_flat[:, b], dk, n)
+        d_ctx_b = d_ctx_t'
+
+        d_A_raw = d_ctx_b * V_b
+        d_Vbt = A' * d_ctx_b
+
+        d_scores = A .* (d_A_raw .- sum(d_A_raw .* A, dims=2)) ./ sqrt(Float64(dk))
+
+        d_Q_b = K_b * d_scores'
+        d_K_b = Q_b * d_scores
 
         for j in 1:n
             s = (j-1)*d + 1
-            e = j*d
-            jet_j = l.jets_inp[s:e, b:b]
+            e_idx = j*d
+            jet_j = l.jets_inp[s:e_idx, b:b]
             l.dWq .+= d_Q_b[:, j:j] * jet_j' ./ B
             l.dWk .+= d_K_b[:, j:j] * jet_j' ./ B
-            l.dWv .+= d_V_b[j:j, :]' * jet_j' ./ B
-            d_jets[s:e, b] .+= vec(l.Wq' * d_Q_b[:, j:j] .+
-                                    l.Wk' * d_K_b[:, j:j] .+
-                                    l.Wv' * d_V_b[j:j, :]')
+            l.dWv .+= reshape(d_Vbt[j, :], dk, 1) * jet_j' ./ B
+            d_jets[s:e_idx, b] .+= vec(l.Wq' * d_Q_b[:, j:j] .+
+                                        l.Wk' * d_K_b[:, j:j] .+
+                                        l.Wv' * reshape(d_Vbt[j, :], dk, 1))
         end
     end
 
@@ -143,12 +145,11 @@ function bwd_caji!(l::CAJILayer, d_out::Matrix{Float64}, lambda::Float64, clip::
     gnorm = sqrt(sum(l.dWq.^2) + sum(l.dWk.^2) + sum(l.dWv.^2) +
                  sum(l.dWo.^2) + sum(l.dbo.^2))
     if gnorm > clip
-        s = clip / gnorm
-        l.dWq .*= s; l.dWk .*= s; l.dWv .*= s
-        l.dWo .*= s; l.dbo .*= s
+        sc = clip / gnorm
+        l.dWq .*= sc; l.dWk .*= sc; l.dWv .*= sc
+        l.dWo .*= sc; l.dbo .*= sc
     end
 
-    d_X = zeros(size(d_out, 1) > 0 ? size(d_jets, 1) : 0, B)
     return d_jets
 end
 

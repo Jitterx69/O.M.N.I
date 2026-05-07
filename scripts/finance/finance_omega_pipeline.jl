@@ -1,5 +1,5 @@
-include("../src/experimental/omega_finance.jl")
-include("../src/finance_loader.jl")
+include("../../src/experimental/omega_finance.jl")
+include("../../src/finance_loader.jl")
 
 function run_finance_omega_pipeline()
     println("\n" * "█"^80)
@@ -103,7 +103,7 @@ function run_finance_omega_pipeline()
 
     println("\n  Results saved to results/omega_finance_results.txt")
     mkpath("results")
-    write("results/omega_finance_results.txt", "OMNI Omega Deployment Accuracy: $(acc_omega * 100)%")
+    write("results/finance/omega_finance_results.txt", "OMNI Omega Deployment Accuracy: $(acc_omega * 100)%")
 end
 
 run_finance_omega_pipeline()

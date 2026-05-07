@@ -1,9 +1,9 @@
 using Statistics, Random, Printf, Dates
 
-include("../src/core.jl")
-include("../src/experimental/kan.jl")
-include("../src/experimental/hebbian.jl")
-include("../src/experimental/info_bottleneck.jl")
+include("../../src/core.jl")
+include("../../src/experimental/kan.jl")
+include("../../src/experimental/hebbian.jl")
+include("../../src/experimental/info_bottleneck.jl")
 
 const TOURNEY_POP = 25
 const TOURNEY_GENS = 8
@@ -416,7 +416,7 @@ end
 champion_genome, champion_model, champion_metrics = run_tournament()
 
 mkpath("results")
-open("results/tournament_results.txt", "w") do io
+open("results/evolution/tournament_results.txt", "w") do io
     println(io, "O.M.N.I. Multi-Agent Tournament Results -- $(now())")
     println(io, "="^60)
     @printf(io, "Champion Species: %s\n", uppercase(string(champion_genome.species)))

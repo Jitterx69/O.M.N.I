@@ -1,9 +1,9 @@
 using Printf, Dates, Statistics
 
-include("../src/core.jl")
-include("../src/experimental/kan.jl")
-include("../src/experimental/hebbian.jl")
-include("../src/deploy/serialize.jl")
+include("../../src/core.jl")
+include("../../src/experimental/kan.jl")
+include("../../src/experimental/hebbian.jl")
+include("../../src/deploy/serialize.jl")
 
 function run_deploy_pipeline()
     println("\n" * "█"^80)
@@ -153,7 +153,7 @@ function run_deploy_pipeline()
     end
 
     mkpath("results")
-    open("results/deployment_report.txt", "w") do io
+    open("results/deploy/deployment_report.txt", "w") do io
         println(io, "O.M.N.I. Production Deployment Report -- $(now())")
         println(io, "="^60)
         @printf(io, "MLP Accuracy:     %.4f\n", loaded_m.acc)

@@ -1,5 +1,5 @@
-include("../src/experimental/hebbian.jl")
-include("../src/finance_loader.jl")
+include("../../src/experimental/hebbian.jl")
+include("../../src/finance_loader.jl")
 
 function run_finance_hebbian_experiment()
     println("\n" * "═"^80)
@@ -116,7 +116,7 @@ function run_finance_hebbian_experiment()
     end
 
     elapsed = Dates.value(now() - t0) / 1000.0
-    println("\n  Total Time: %.1fs" % elapsed)
+    @printf("\n  Total Time: %.1fs\n", elapsed)
     
     # Save results
     mkpath(joinpath(FINANCE_PROJECT_DIR, "results"))

@@ -1,4 +1,4 @@
-include("../src/dvs_loader.jl")
+include("../../src/dvs_loader.jl")
 
 const SURROGATE_SCALE = 5.0
 const V_THRESHOLD = 1.0
@@ -146,7 +146,7 @@ function forward_snn!(net::GestureSNN, X::Matrix{Float64})
     return softmax_s(net.head.W * spike_counts .+ net.head.b)
 end
 
-function backward_snn!(net::GestureSNN, y_oh, y_pred; l2=1e-4, clip=1.0)
+function backward_snn!(net::GestureSNN, X::Matrix{Float64}, y_oh, y_pred; l2=1e-4, clip=1.0)
     B = size(y_oh, 2)
     d = y_pred .- y_oh
 
@@ -171,15 +171,20 @@ function backward_snn!(net::GestureSNN, y_oh, y_pred; l2=1e-4, clip=1.0)
 
     # Accumulate projection gradients across time
     net.proj.dW .= 0.0; net.proj.db .= 0.0
-    X_seq = reshape_voxel_temporal(
-        hcat([net.lif1.inp[:, :, 1] for _ in 1:1]...), SNN_T_STEPS)
+    X_seq = reshape_voxel_temporal(X, SNN_T_STEPS)
 
     for t in 1:SNN_T_STEPS
-        pre_act = net.proj.W * net.lif1.inp[:, :, t]
+        pre_act = net.proj.W * X_seq[:, :, t] .+ net.proj.b
         d_proj = dX_proj[:, :, t] .* lrelu_d.(pre_act)
-        # We approximate the input; the exact input was consumed during forward
+        net.proj.dW .+= (d_proj * X_seq[:, :, t]') ./ B
+        net.proj.db .+= vec(sum(d_proj, dims=2)) ./ B
     end
-    # Simplified: use lif1 input trace
+    net.proj.dW .+= l2 .* net.proj.W
+    
+    gnorm_proj = sqrt(sum(net.proj.dW.^2) + sum(net.proj.db.^2))
+    if gnorm_proj > clip
+        s = clip / gnorm_proj; net.proj.dW .*= s; net.proj.db .*= s
+    end
 end
 
 function adam_snn!(net::GestureSNN, lr, t; β1=0.9, β2=0.999, ε=1e-8)
@@ -273,7 +278,7 @@ function run_dvs_snn()
             y_oh = dvs_onehot(y_b, DVS_CLASSES)
 
             y_pred = forward_snn!(net, X_b)
-            backward_snn!(net, y_oh, y_pred; l2=1e-4, clip=1.0)
+            backward_snn!(net, X_b, y_oh, y_pred; l2=1e-4, clip=1.0)
             adam_snn!(net, lr, step)
 
             preds = [argmax(y_pred[:, i]) for i in 1:size(y_pred, 2)]

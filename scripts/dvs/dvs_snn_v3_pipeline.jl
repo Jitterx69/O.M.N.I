@@ -1,4 +1,4 @@
-include("../src/dvs_loader.jl")
+include("../../src/dvs_loader.jl")
 
 const SURROGATE_SCALE = 5.0
 const V_THRESHOLD = 1.0
@@ -40,10 +40,11 @@ mutable struct LIFBlock
     U::Array{Float64, 3}
     S::Array{Float64, 3}
     inp::Array{Float64, 3}
+    v_th::Float64
 end
 
 function LIFBlock(ni, no)
-    LIFBlock(SpikeDense(ni, no), zeros(0,0,0), zeros(0,0,0), zeros(0,0,0))
+    LIFBlock(SpikeDense(ni, no), zeros(0,0,0), zeros(0,0,0), zeros(0,0,0), V_THRESHOLD)
 end
 
 function fwd_lif!(blk::LIFBlock, X_seq::Array{Float64, 3}; training=false)
@@ -58,13 +59,24 @@ function fwd_lif!(blk::LIFBlock, X_seq::Array{Float64, 3}; training=false)
     for t in 1:T
         curr = blk.layer.W * X_seq[:, :, t] .+ blk.layer.b
         blk.U[:, :, t+1] = V_LEAK .* blk.U[:, :, t] .+ (1.0 - V_LEAK) .* curr
-        spikes = Float64.(blk.U[:, :, t+1] .> V_THRESHOLD)
+        spikes = Float64.(blk.U[:, :, t+1] .> blk.v_th)
         if training
             mask = rand(size(spikes)...) .> SPIKE_DROPOUT
             spikes .*= mask
         end
         blk.S[:, :, t] = spikes
-        blk.U[:, :, t+1] .-= spikes .* V_THRESHOLD
+        blk.U[:, :, t+1] .-= spikes .* blk.v_th
+    end
+
+    # Dynamic Threshold Scaling (Surgical Fix 1)
+    if training
+        rate = mean(blk.S)
+        if rate < 0.02 # Too quiet
+            blk.v_th *= 0.95
+        elseif rate > 0.15 # Too loud
+            blk.v_th *= 1.05
+        end
+        blk.v_th = clamp(blk.v_th, 0.2, 2.0)
     end
 
     return blk.S
@@ -79,7 +91,7 @@ function bwd_lif!(blk::LIFBlock, dS::Array{Float64, 3}, lambda, clip=1.0)
     dX = zeros(size(blk.inp))
 
     for t in T:-1:1
-        grad_s = surrogate_grad.(blk.U[:, :, t+1] .- V_THRESHOLD)
+        grad_s = surrogate_grad.(blk.U[:, :, t+1] .- blk.v_th)
         dU_curr = dS[:, :, t] .+ dU .* V_LEAK
         dU_fire = dU_curr .* grad_s
         dI = dU_fire .* (1.0 - V_LEAK)
@@ -87,7 +99,7 @@ function bwd_lif!(blk::LIFBlock, dS::Array{Float64, 3}, lambda, clip=1.0)
         l.dW .+= (dI * blk.inp[:, :, t]') ./ B
         l.db .+= vec(sum(dI, dims=2)) ./ B
         dX[:, :, t] = l.W' * dI
-        dU = dU_curr .- dU_fire .* V_THRESHOLD
+        dU = dU_curr .- dU_fire .* blk.v_th
     end
 
     l.dW .+= lambda .* l.W
@@ -167,17 +179,23 @@ end
 
 function forward_snn_v3!(net::GestureSNNv3, X::Matrix{Float64})
     B = size(X, 2)
-    X_seq = reshape_voxel_temporal_v3(X, SNN_T_STEPS)
-    spatial_in = size(X_seq, 1)
-
+    # Surgical Fix 3: Input Gain Boost
+    X_seq = reshape_voxel_temporal_v3(X, SNN_T_STEPS) .* 5.0
+    
     proj_seq = zeros(net.lif1.layer.ni, B, SNN_T_STEPS)
     for t in 1:SNN_T_STEPS
         proj_seq[:, :, t] = lrelu.(net.proj.W * X_seq[:, :, t] .+ net.proj.b)
     end
 
     h1 = fwd_lif!(net.lif1, proj_seq; training=net.training)
-    h2 = fwd_lif!(net.lif2, h1; training=net.training)
-    h3 = fwd_lif!(net.lif3, h2; training=net.training)
+    
+    # Surgical Fix 2: Residual Spiking (LIF1 -> LIF2)
+    h2_in = h1 # 256
+    h2 = fwd_lif!(net.lif2, h2_in; training=net.training)
+    
+    # Residual Skip: Summing spikes from different depths
+    h3_in = h2 .+ h1[1:size(h2, 1), :, :]
+    h3 = fwd_lif!(net.lif3, h3_in; training=net.training)
 
     readout, _ = apply_temporal_attention(net.attn, h3)
     return softmax_s(net.head.W * readout .+ net.head.b)
@@ -214,12 +232,21 @@ function backward_snn_v3!(net::GestureSNNv3, X::Matrix{Float64}, y_oh, y_pred, c
         dS3[:, :, t] = d_readout .* alpha[t]
     end
 
-    dS2 = bwd_lif!(net.lif3, dS3, l2, clip)
-    dS1 = bwd_lif!(net.lif2, dS2, l2, clip)
+    # Backprop through Residual Stack
+    dS_lif3 = bwd_lif!(net.lif3, dS3, l2, clip)
+    
+    # Residual dS: dS_lif3 flows to both lif2 and lif1 skip
+    dS2 = dS_lif3
+    dS_lif2 = bwd_lif!(net.lif2, dS2, l2, clip)
+    
+    # Gradient flow for skip connection
+    dS1 = dS_lif2
+    dS1[1:size(dS_lif3, 1), :, :] .+= dS_lif3
+    
     dX_proj = bwd_lif!(net.lif1, dS1, l2, clip)
 
     net.proj.dW .= 0.0; net.proj.db .= 0.0
-    X_seq = reshape_voxel_temporal_v3(X, SNN_T_STEPS)
+    X_seq = reshape_voxel_temporal_v3(X, SNN_T_STEPS) .* 5.0
 
     for t in 1:SNN_T_STEPS
         pre_act = net.proj.W * X_seq[:, :, t] .+ net.proj.b

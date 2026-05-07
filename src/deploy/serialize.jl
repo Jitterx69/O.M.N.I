@@ -64,10 +64,10 @@ function serialize_net(net, path::String; model_type::UInt8=LAYER_DENSE)
             for i in 1:length(net.layers)-1
                 bn = net.bns[i]
                 write(io, LAYER_BN)
-                write_vector(io, bn.gamma)
-                write_vector(io, bn.beta)
-                write_vector(io, bn.mu_run)
-                write_vector(io, bn.sig_run)
+                write_vector(io, bn.γ)
+                write_vector(io, bn.β)
+                write_vector(io, bn.rμ)
+                write_vector(io, bn.rσ²)
             end
 
         elseif model_type == LAYER_KAN
@@ -137,15 +137,15 @@ function deserialize_net(path::String)
             bns = BN[]
             for _ in 1:n_layers-1
                 _ = read(io, UInt8)
-                gamma = read_vector(io)
-                beta = read_vector(io)
-                mu_run = read_vector(io)
-                sig_run = read_vector(io)
-                bn = BN(length(gamma))
-                bn.gamma .= gamma
-                bn.beta .= beta
-                bn.mu_run .= mu_run
-                bn.sig_run .= sig_run
+                g = read_vector(io)
+                b = read_vector(io)
+                rm = read_vector(io)
+                rs = read_vector(io)
+                bn = BN(length(g))
+                bn.γ .= g
+                bn.β .= b
+                bn.rμ .= rm
+                bn.rσ² .= rs
                 push!(bns, bn)
             end
 
@@ -155,10 +155,10 @@ function deserialize_net(path::String)
                 net.layers[i].b .= l.b
             end
             for (i, bn) in enumerate(bns)
-                net.bns[i].gamma .= bn.gamma
-                net.bns[i].beta .= bn.beta
-                net.bns[i].mu_run .= bn.mu_run
-                net.bns[i].sig_run .= bn.sig_run
+                net.bns[i].γ .= bn.γ
+                net.bns[i].β .= bn.β
+                net.bns[i].rμ .= bn.rμ
+                net.bns[i].rσ² .= bn.rσ²
             end
             set_mode!(net, false)
             return net, :mlp

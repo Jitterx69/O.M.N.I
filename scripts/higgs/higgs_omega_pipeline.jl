@@ -1,5 +1,5 @@
-include("../src/higgs_loader.jl")
-include("../src/experimental/info_bottleneck.jl")
+include("../../src/higgs_loader.jl")
+include("../../src/experimental/info_bottleneck.jl")
 
 function run_higgs_omega()
     println("\n" * "█"^80)
@@ -7,7 +7,7 @@ function run_higgs_omega()
     println("   Physics-Informed Features | Lagrangian Beta | Residual Bottleneck")
     println("█"^80)
 
-    path = joinpath(HIGGS_PROJECT_DIR, "data", "HIGGS.csv")
+    path = joinpath(HIGGS_PROJECT_DIR, "data", "higgs", "HIGGS.csv")
     if !isfile(path)
         println("  ERROR: HIGGS.csv not found at $path")
         return
@@ -99,7 +99,7 @@ function run_higgs_omega()
     println("  HIGGS OMEGA COMPLETE | Time: $(elapsed)s | Best Acc: $(best_acc*100)%")
     
     mkpath("results")
-    open("results/higgs_omega_results.txt", "w") do io
+    open("results/physics/higgs_omega_results.txt", "w") do io
         println(io, "HIGGS Omega Results -- $(now())")
         @printf(io, "Best Accuracy: %.4f\n", best_acc)
         @printf(io, "Final Beta: %.1e\n", β)

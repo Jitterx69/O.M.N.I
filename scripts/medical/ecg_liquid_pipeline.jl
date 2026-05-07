@@ -1,4 +1,4 @@
-include("../src/ecg_loader.jl")
+include("../../src/ecg_loader.jl")
 
 const LNN_LATENT = 32
 const LNN_STEPS = 25

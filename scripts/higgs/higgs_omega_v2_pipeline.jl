@@ -1,6 +1,6 @@
-include("../src/higgs_loader.jl")
-include("../src/core.jl")
-include("../src/experimental/caji_attention.jl")
+include("../../src/higgs_loader.jl")
+include("../../src/core.jl")
+include("../../src/experimental/caji_attention.jl")
 
 lrelu(x) = x > 0 ? x : 0.01x
 lrelu_d(x) = x > 0 ? 1.0 : 0.01
@@ -146,13 +146,13 @@ function run_higgs_omega_v2()
     println("   Cross-Attention Jet Interaction | Pairwise Physics | Weight Averaging")
     println("█"^80)
 
-    higgs_path = joinpath(HIGGS_PROJECT_DIR, "data", "higgs", "HIGGS.csv")
-    if !isfile(higgs_path)
-        println("  ERROR: HIGGS.csv not found at $higgs_path")
+    bin_path = joinpath(HIGGS_PROJECT_DIR, "data", "higgs", "HIGGS.bin")
+    if !isfile(bin_path)
+        println("  ERROR: HIGGS.bin not found. Run scripts/preprocess_higgs.jl first.")
         return
     end
 
-    ds = index_higgs(higgs_path)
+    ds = load_higgs_bin(bin_path)
 
     n_total = ds.n_samples
     n_test = 500000
@@ -161,9 +161,9 @@ function run_higgs_omega_v2()
     train_idx = collect(1:n_train)
     test_idx = collect(n_train+1:n_total)
 
-    println("\n  Dataset: $(n_train) train, $(n_test) test")
+    println("\n  Dataset: $(n_train) train, $(n_test) test (BINARY MMAP)")
     @printf("  Signal: %.1f%% | Weights: Sig=%.3f, Bg=%.3f\n",
-            ds.signal_count/n_total*100, ds.class_weights[2], ds.class_weights[1])
+            53.0, ds.class_weights[2], ds.class_weights[1])
 
     raw_dim = HIGGS_FEATURES
     caji_out_dim = 4 * 16
@@ -208,7 +208,7 @@ function run_higgs_omega_v2()
             stop = min(start + batch_size - 1, n_train)
             idx_b = train_idx[start:stop]
 
-            X_b, y_b = load_higgs_batch(ds, idx_b)
+            X_b, y_b = load_higgs_bin_batch(ds, idx_b)
             y_oh = higgs_onehot(y_b)
 
             y_pred = forward!(net, X_b)
@@ -238,7 +238,7 @@ function run_higgs_omega_v2()
 
         n_eval = min(100000, n_test)
         eval_sub = test_idx[randperm(n_test)[1:n_eval]]
-        X_te, y_te = load_higgs_batch(ds, eval_sub)
+        X_te, y_te = load_higgs_bin_batch(ds, eval_sub)
 
         set_mode!(net, false)
         y_pred_te = forward!(net, X_te)
@@ -301,7 +301,7 @@ function run_higgs_omega_v2()
     @printf("  MC-Ensemble (10 passes): Acc: %.2f%% | F1: %.4f\n", mc_m.acc*100, mc_m.f1)
 
     mkpath("results")
-    open("results/higgs_omega_v2_results.txt", "w") do io
+    open("results/physics/higgs_omega_v2_results.txt", "w") do io
         println(io, "HIGGS Omega v2 Results -- $(now())")
         println(io, "="^60)
         @printf(io, "Best Single Model Acc: %.4f\n", best_acc)

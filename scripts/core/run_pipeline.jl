@@ -12,19 +12,19 @@ end
 
 println("\n" * "" * "  PHASE 1: NEUROEVOLUTION ARCHITECTURE SEARCH")
 println("  " * "─"^76)
-include("../src/modules/neuroevolution.jl")
+include("../../src/modules/neuroevolution.jl")
 
 println("\n\n" * "" * "  PHASE 2: NEURAL PRUNING (COMPRESSION)")
 println("  " * "─"^76)
-include("../src/modules/pruning.jl")
+include("../../src/modules/pruning.jl")
 
 println("\n\n" * "" * "  PHASE 3: EXPLAINABILITY ENGINE (XAI)")
 println("  " * "─"^76)
-include("../src/modules/explainability.jl")
+include("../../src/modules/explainability.jl")
 
 println("\n\n" * "" * "  PHASE 4: BAYESIAN UNCERTAINTY QUANTIFICATION")
 println("  " * "─"^76)
-include("../src/modules/uncertainty.jl")
+include("../../src/modules/uncertainty.jl")
 
 println("\n" * "═"^80)
 println("   ENTIRE ADVANCED PIPELINE COMPLETED SUCCESSFULLY!")

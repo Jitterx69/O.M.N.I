@@ -1,4 +1,4 @@
-include("../src/higgs_loader.jl")
+include("../../src/higgs_loader.jl")
 
 # Minimal redundant inclusion of Stochastic Bottleneck logic for the Higgs scale
 mutable struct StochasticBottleneck

@@ -7,8 +7,8 @@ include("hebbian.jl")
 mutable struct OmegaNet
     kan_enc::ChebKANLayer
     plastic::PlasticDense
-    recon_head::Dense      # For Self-Supervised pre-training
-    predict_head::Dense    # For Directional forecasting
+    recon_head::Dense      
+    predict_head::Dense    
     training::Bool
 end
 
@@ -24,12 +24,11 @@ function forward_recon!(n::OmegaNet, X::Matrix{Float64})
     h1 = lrelu.(fwd!(n.kan_enc, X))
     h2 = lrelu.(fwd!(n.plastic, h1))
     
-    # Self-Supervised Trace Update (Relate current state to latent)
     if n.training
         update_trace!(n.plastic, h1, h2)
     end
     
-    fwd!(n.recon_head, h2) # Reconstruct X
+    fwd!(n.recon_head, h2)
 end
 
 function forward_predict!(n::OmegaNet, X::Matrix{Float64})
