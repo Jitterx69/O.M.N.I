@@ -1,10 +1,10 @@
 include("../../src/dvs_loader.jl")
 
 const SURROGATE_SCALE = 5.0
-const V_THRESHOLD = 1.0
-const V_LEAK = 0.9
+const V_THRESHOLD = 0.85
+const V_LEAK = 0.85
 const SNN_T_STEPS = DVS_TIME_BINS
-const SPIKE_DROPOUT = 0.2
+const SPIKE_DROPOUT = 0.25
 
 lrelu(x) = x > 0 ? x : 0.01x
 lrelu_d(x) = x > 0 ? 1.0 : 0.01
@@ -302,10 +302,16 @@ function forward_v4!(net::GestureSNNv4, X::Matrix{Float64})
     return softmax_s(net.head.W * readout .+ net.head.b)
 end
 
-function backward_v4!(net::GestureSNNv4, y_oh, y_pred, weights; lr=1e-3, l2=1e-4, clip=1.0)
+function backward_v4!(net::GestureSNNv4, y_oh, y_pred, weights; lr=1e-3, l2=1e-5, clip=1.0)
     B = size(y_oh, 2)
     d = (y_pred .- y_oh)
-    for i in 1:B; d[:, i] .*= weights[argmax(y_oh[:, i])]; end
+    # Focal Loss Gradient Approximation (gamma = 2.0)
+    for i in 1:B
+        target_idx = argmax(y_oh[:, i])
+        p_t = y_pred[target_idx, i]
+        focal_weight = (1.0 - p_t)^2.0
+        d[:, i] .*= weights[target_idx] * focal_weight
+    end
     
     readout, alpha = apply_attention(net.attn, net.lif2.S)
     net.head.dW = d * readout' ./ B .+ l2 .* net.head.W
@@ -380,7 +386,7 @@ function run_dvs_v4()
     for l in y_train; counts[l] += 1; end
     weights = sum(counts) ./ (11 .* max.(counts, 1.0))
 
-    epochs = 80
+    epochs = 120
     batch_size = 16
     n = length(y_train)
     net = GestureSNNv4()
