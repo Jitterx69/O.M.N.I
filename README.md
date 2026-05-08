@@ -8,9 +8,16 @@
 
 ## 1. Abstract
 
-Project O.M.N.I. is an advanced, zero-dependency machine learning architecture and inference repository engineered entirely from mathematical first principles. Operating strictly within the Julia Standard Library, this project circumvents the bloated abstraction layers inherent to commercial deep learning frameworks (such as PyTorch or TensorFlow). By implementing forward propagation, complex gradient derivation, orthogonal polynomial expansion, and numerical integration manually, O.M.N.I. guarantees absolute deterministic transparency and low-level computational control. 
+Project O.M.N.I. (Orthogonal Mathematical Neural Inference) is an advanced, zero-dependency machine learning architecture and inference repository engineered entirely from mathematical first principles. Operating strictly within the Julia Standard Library, this project deliberately circumvents the bloated abstraction layers, massive dependency chains, and opaque compiled binaries inherent to commercial deep learning frameworks (such as PyTorch or TensorFlow). By explicitly writing the native matrix multiplications, implementing complex gradient derivation via the chain rule, establishing orthogonal polynomial expansions, and coding customized numerical ODE integration algorithms manually, O.M.N.I. guarantees absolute deterministic transparency, zero-copy memory logistics, and low-level computational control over the entire silicon pipeline.
 
-This repository serves as both an experimental proving ground for bleeding-edge theoretical paradigms—such as Continuous-Depth Neural Ordinary Differential Equations and Kolmogorov-Arnold Networks—and a blueprint for secure, mathematically transparent, mission-critical deployment systems.
+Beyond serving as a foundational blueprint for secure, mathematically transparent, mission-critical deployment systems, the repository functions as an experimental proving ground for bleeding-edge theoretical paradigms. O.M.N.I. successfully engineers solutions for domains where traditional Deep Learning fails. The framework seamlessly integrates:
+- **Neuromorphic Computing:** Dual-Stream Spiking Neural Networks (SNNs) for ultra-low latency, event-driven vision processing.
+- **Particle Physics Discovery:** Zero-copy Binary Mmap Engines capable of streaming millions of kinematic manifolds natively to the CPU cache.
+- **High-Frequency Finance:** Unsupervised, Robust Hebbian Learning logic that dynamically mutates synaptic weights to counter volatile market regime shifts.
+- **Continuous Medical Telemetry:** Liquid Neural Networks (LNNs) governed by biological time constants to process irregular physiological time-series data without synthetic interpolation.
+- **Next-Generation Architectures:** Continuous-Depth Neural Ordinary Differential Equations and highly compressed Chebyshev Kolmogorov-Arnold Networks (KANs).
+
+By collapsing these massively complex pipelines into highly optimized, platform-agnostic "Iron" standalone scripts, O.M.N.I. bridges the gap between raw theoretical calculus and production-ready, highly parallelized hardware execution.
 
 ---
 
@@ -20,16 +27,23 @@ This repository serves as both an experimental proving ground for bleeding-edge 
 2. [Ideation and Genesis](#2-ideation-and-genesis)
 3. [The Problem Statement](#3-the-problem-statement)
 4. [Explored and Developed Methodologies](#4-explored-and-developed-methodologies)
-    1. [Kolmogorov-Arnold Networks (KANs)](#51-kolmogorov-arnold-networks-kans)
-    2. [Continuous-Depth Neural Ordinary Differential Equations](#52-continuous-depth-neural-ordinary-differential-equations)
-    3. [Bayesian Uncertainty Quantification via Stochastic Regularization](#53-bayesian-uncertainty-quantification-via-stochastic-regularization)
-    4. [Data-Driven Magnitude Pruning and Compression](#54-data-driven-magnitude-pruning-and-compression)
-    5. [Neuroevolutionary Topology Search](#55-neuroevolutionary-topology-search)
-    6. [Dual-Method Explainability Engine (XAI)](#56-dual-method-explainability-engine-xai)
-5. [Deployment and Implementation Strategies](#5-deployment-and-implementation-strategies)
-    1. [Mission-Critical and Highly-Classified Environments](#61-mission-critical-and-highly-classified-environments)
-    2. [Embedded Systems and Edge Computing](#62-embedded-systems-and-edge-computing)
-    3. [Automated Risk Mitigation](#63-automated-risk-mitigation)
+    1. [Kolmogorov-Arnold Networks (KANs)](#61-kolmogorov-arnold-networks-kans)
+    2. [Continuous-Depth Neural Ordinary Differential Equations](#62-continuous-depth-neural-ordinary-differential-equations)
+    3. [Bayesian Uncertainty Quantification via Stochastic Regularization](#63-bayesian-uncertainty-quantification-via-stochastic-regularization)
+    4. [Data-Driven Magnitude Pruning and Compression](#64-data-driven-magnitude-pruning-and-compression)
+    5. [Neuroevolutionary Topology Search](#65-neuroevolutionary-topology-search)
+    6. [Dual-Method Explainability Engine (XAI)](#66-dual-method-explainability-engine-xai)
+    7. [Neuromorphic Spiking Vision (DVS SNN Omega v5/v6)](#67-neuromorphic-spiking-vision-dvs-snn-omega-v5v6)
+    8. [Particle Physics Discovery (HIGGS Omega v2)](#68-particle-physics-discovery-higgs-omega-v2)
+    9. [High-Frequency Financial Intelligence (Omega & Robust Hebbian)](#69-high-frequency-financial-intelligence-omega--robust-hebbian)
+    10. [Continuous Medical Telemetry (ECG Liquid NN)](#610-continuous-medical-telemetry-ecg-liquid-nn)
+5. [Deployment and Implementation Strategies](#6-deployment-and-implementation-strategies)
+    1. [Empirical Telemetry Matrix](#empirical-telemetry-matrix)
+    2. [Hardware Operations & Architectural Specifications](#61-hardware-operations--architectural-specifications)
+    3. [Mission-Critical and Highly-Classified Environments](#62-mission-critical-and-highly-classified-environments)
+    4. [Embedded Systems and Edge Computing](#63-embedded-systems-and-edge-computing)
+    5. [Automated Risk Mitigation](#64-automated-risk-mitigation)
+    6. [Platform-Agnostic Standalone Execution](#65-platform-agnostic-standalone-execution)
 6. [Execution Protocol](#7-execution-protocol)
 7. [Developer and Intellectual Property](#8-developer-and-intellectual-property)
 8. [License](#9-license)
@@ -38,20 +52,28 @@ This repository serves as both an experimental proving ground for bleeding-edge 
 
 ## 3. Ideation and Genesis
 
-The ideation of Project O.M.N.I. originated from a critical observation regarding the current trajectory of applied machine learning: **the over-reliance on opaque, abstracted frameworks.** Modern deep learning libraries prioritize rapid prototyping at the expense of computational transparency, resulting in massive dependency chains, compiled library bloat, and "black box" automated differentiation systems that abstract away the underlying calculus.
+The ideation of Project O.M.N.I. (Orthogonal Mathematical Neural Inference) originated from a critical observation regarding the current trajectory of applied machine learning: **the systemic over-reliance on opaque, abstracted, and fragile frameworks.** Modern deep learning libraries—while efficient for rapid prototyping—prioritize ease of use at the severe expense of computational transparency and operational security. This has resulted in a landscape of massive, unverifiable dependency chains, compiled library bloat (cuDNN, MKL), and "black box" automated differentiation systems that abstract away the underlying calculus, making verification in high-stakes environments nearly impossible.
 
-The primary requirement driving O.M.N.I. was the creation of a sophisticated inference engine capable of executing experimental, non-standard architectures without being constrained by the pre-compiled tensor operations of existing libraries. By returning to the foundational calculus and linear algebra, the goal was to construct a highly optimized, modular system where every matrix multiplication, polynomial derivative, and stochastic pass is explicitly coded and mathematically verifiable. This foundational transparency allows for rapid architectural mutation, leading directly to the implementation of the advanced features detailed below.
+### The Philosophical Catalyst: Mathematical Decoupling
+The primary requirement driving O.M.N.I. was the creation of a sophisticated inference engine that is **mathematically decoupled** from third-party vendor cycles. In mission-critical sectors (Defense, High-Frequency Finance, Aerospace), the inability to audit the raw gradient flow or the exact memory allocation pattern of a training loop represents a profound systemic risk. 
+
+By returning to foundational calculus and linear algebra, O.M.N.I. was engineered as a zero-dependency environment where every matrix multiplication, polynomial derivative, and stochastic pass is explicitly coded and mathematically verifiable. This foundational transparency allows for rapid architectural mutation—enabling the implementation of non-standard paradigms like Kolmogorov-Arnold Networks (KANs) and Spiking Neural Networks (SNNs) that often struggle within the rigid tensor-graph constraints of commercial libraries.
+
+### The "Iron" Deployment Philosophy
+O.M.N.I. was further ideated as a bridge between high-level research and "Iron" deployment. We recognized a significant friction point in the transition from complex research repositories to production environments. To resolve this, the project emphasizes a **Standalone Execution Strategy**. By collapsing massively complex pipelines into highly optimized, platform-agnostic standalone scripts, O.M.N.I. ensures that the most sophisticated theoretical breakthroughs can be deployed instantaneously on any hardware—from air-gapped secure servers to edge microcontrollers—without the friction of environment configuration, `pip install` cycles, or containerization overhead. 
+
 
 ---
 
 ## 4. The Problem Statement
 
-Project O.M.N.I. was systematically engineered to resolve four critical limitations inherent to classical deep learning deployments:
+Project O.M.N.I. was systematically engineered to resolve five critical systemic limitations inherent to classical deep learning deployments and commercial framework ecosystems:
 
-1. **The Black Box Paradigm (Lack of Interpretability):** Neural networks map inputs to outputs via millions of obfuscated parameters, rendering it impossible to ascertain *why* a decision was made. In medical, financial, or classified deployments, lack of explainability is a disqualifying attribute.
-2. **Deterministic Overconfidence:** Standard neural models provide absolute point-estimate predictions. A model will confidently predict an output even if the input is completely out-of-distribution (OOD) relative to the training data. This lack of epistemic humility leads to catastrophic real-world failures.
-3. **Architectural Rigidity and Human Bias:** Topologies (layer counts, nodal widths, regularization rates) are typically assigned via human intuition or inefficient grid searches, resulting in sub-optimal structural geometries.
-4. **Parameter Inefficiency:** Standard Multi-Layer Perceptrons (MLPs) require exponential parameter scaling to approximate complex, non-linear manifolds, resulting in vast computational waste and high memory footprints.
+1. **The Black Box Paradigm (Lack of Interpretability):** Classical neural networks operate as "opaque mappers," transforming high-dimensional inputs to outputs via millions of obfuscated parameters. This lack of transparency renders it impossible to ascertain the underlying rationale for a specific inference. In high-stakes medical diagnostics, autonomous defense protocols, or sovereign financial systems, this inability to audit the internal logic of a model is a critical disqualifying attribute.
+2. **Deterministic Overconfidence & Epistemic Failure:** Standard neural models provide absolute, point-estimate predictions without any native representation of doubt. A model will confidently assign a high-probability classification even if the input is completely out-of-distribution (OOD) relative to its training manifold. This lack of epistemic humility leads to silent failures in production, where systems operate outside their bounds of competence without alerting human operators.
+3. **Architectural Rigidity and Topological Bias:** Network geometries (layer depths, nodal widths, and connectivity patterns) are traditionally assigned via human intuition or computationally expensive hyper-parameter grid searches. This results in sub-optimal, "brute-force" structural geometries that are over-engineered for simple tasks and under-powered for complex, non-linear dynamics.
+4. **Parameter Inefficiency & High Computational Footprint:** Standard Multi-Layer Perceptrons (MLPs) require exponential parameter scaling to approximate complex manifolds, resulting in vast computational waste, high VRAM footprints, and excessive energy consumption. This inefficiency renders sophisticated deep learning inaccessible to edge computing environments and ultra-low-power microcontrollers.
+5. **Framework Dependency & Supply-Chain Fragility:** Modern ML is inextricably linked to massive third-party library ecosystems (PyTorch, TensorFlow, CUDA). This creates a critical vulnerability where mission-critical systems are dependent on opaque, proprietary binaries and rapidly shifting API surfaces. A single framework update or supply-chain intrusion can destabilize an entire deployment pipeline, making long-term operational resilience impossible.
 
 ---
 
@@ -59,7 +81,7 @@ Project O.M.N.I. was systematically engineered to resolve four critical limitati
 
 To address the aforementioned problems, Project O.M.N.I. incorporates a suite of highly advanced, research-grade methodologies. Each module was designed, derived, and implemented from scratch.
 
-### 6.1 Kolmogorov-Arnold Networks (KANs)
+### 5.1 Kolmogorov-Arnold Networks (KANs)
 **Objective:** Resolve parameter inefficiency and topological rigidity.
 **Theoretical Context:** Based on the Kolmogorov-Arnold representation theorem (1957), which posits that any multivariate continuous function can be represented as a superposition of continuous functions of a single variable. In 2024, this theorem was weaponized for deep learning by inverting the standard Multi-Layer Perceptron (MLP) structure.
 **Methodology:** In a classical MLP, nodes possess fixed activation functions and edges possess linear scalar weights. In the O.M.N.I. KAN implementation, nodes simply sum their inputs, and the *edges* contain learnable, continuous non-linear functions. We parameterized these edge functions utilizing orthogonal Chebyshev polynomials of the first kind (`T_k(x)`), coupled with a Sigmoid Linear Unit (SiLU) base activation:
@@ -75,7 +97,7 @@ T'_k(x) = 2 T_{k-1}(x) + 2x T'_{k-1}(x) - T'_{k-2}(x)
 
 **Result:** The standard dense architecture required 141,217 parameters to model the dataset. The Chebyshev KAN modeled the exact same manifold utilizing a 100 -> 8 -> 2 architecture consisting of merely 4,896 parameters—a 96.5% reduction in computational complexity—while maintaining an instantaneous convergence to 97.0% validation accuracy.
 
-### 6.2 Continuous-Depth Neural Ordinary Differential Equations
+### 5.2 Continuous-Depth Neural Ordinary Differential Equations
 **Objective:** Abstract neural depth into a continuous temporal dynamic to further optimize parameter efficiency.
 **Theoretical Context:** Drawing upon the foundational work by Chen et al. (2018), standard residual networks (ResNets) can be viewed as discrete Euler approximations of continuous transformations: `h_{t+1} = h_t + f(h_t, \theta)`. 
 **Methodology:** O.M.N.I. abandons discrete layers entirely, replacing the hidden state with a continuous trajectory over arbitrary depth (modeled as time `t`), governed by the differential equation:
@@ -87,7 +109,7 @@ T'_k(x) = 2 T_{k-1}(x) + 2x T'_{k-1}(x) - T'_{k-2}(x)
 To evaluate the network, the input data undergoes numerical integration utilizing a custom Explicit Euler solver over defined continuous steps. Due to the strict zero-dependency constraint, the continuous Adjoint Sensitivity Method was eschewed in favor of a mathematically exact, discretize-then-optimize manual backpropagation. The chain rule is propagated directly backward through the iterative numerical solver steps.
 **Result:** Utilizing a 16-dimensional continuous latent space evaluated over 10 integration steps, the model achieved 96.5% validation accuracy with only 5,138 parameters.
 
-### 6.3 Bayesian Uncertainty Quantification via Stochastic Regularization
+### 5.3 Bayesian Uncertainty Quantification via Stochastic Regularization
 **Objective:** Resolve deterministic overconfidence and implement risk stratification.
 **Theoretical Context:** Neural networks must express "I don't know" when processing anomalous data. O.M.N.I. approximates variational inference in Bayesian Neural Networks utilizing Monte Carlo (MC) Dropout (Gal & Ghahramani, 2016).
 **Methodology:** By enforcing stochastic dropout during the inference phase, the network performs `M` parallel forward passes, generating a distribution of predictions rather than a scalar point estimate. The module calculates the predictive mean and isolates two critical variance components:
@@ -100,7 +122,7 @@ H(Y|X) = - \sum_{y \in Y} P(y|X) \log_2 P(y|X)
 ```
 **Result:** The Bayesian engine successfully calculates 95% Confidence Intervals for every prediction. Empirical validation proved that predictions stratified automatically into the "High Confidence" category maintained 96.8% accuracy, while the engine correctly isolated "Low Confidence" distributions that correlated with 0.0% accuracy, providing a mathematically sound trigger for human-in-the-loop intervention.
 
-### 6.4 Data-Driven Magnitude Pruning and Compression
+### 5.4 Data-Driven Magnitude Pruning and Compression
 **Objective:** Eliminate structural redundancy and optimize memory allocation.
 **Methodology:** The system tracks the absolute `L_1`-Norm of all nodal activations across the entire dataset distribution to objectively quantify neuron utility:
 ```math
@@ -109,12 +131,12 @@ I_j = \frac{1}{N} \sum_{i=1}^{N} | \text{LeakyReLU}(z_{i,j}) |
 Unlike simplistic masking matrices that merely zero-out weights (failing to recover memory or compute cycles), O.M.N.I. executes an Iterative Magnitude Pruning (IMP) protocol that *physically* reallocates and shrinks the underlying dense weight matrices, bias vectors, and Adam optimizer momentum buffers. 
 **Result:** A massive baseline architecture was algorithmically compressed by 80.1% (from 141K down to 28K parameters). Following a reduced-learning-rate dynamic healing phase, the pruned network achieved a paradoxical +1.5% improvement in generalization capability.
 
-### 6.5 Neuroevolutionary Topology Search
+### 5.5 Neuroevolutionary Topology Search
 **Objective:** Eliminate human bias in architectural design.
 **Methodology:** The deployment of a parallelized genetic algorithm operating over a continuous and discrete hyper-parameter genotype space. Genomes encode layer depth, nodal widths, dropout probabilities, and optimization parameters. The evolutionary mechanics include Tournament Selection, topological layer-swap crossover, and log-space mutation designed to algorithmically contract or expand dimensional manifolds.
 **Result:** The algorithm converged upon a highly optimized topology over 10 generations, entirely automating the structural engineering process.
 
-### 6.6 Dual-Method Explainability Engine (XAI)
+### 5.6 Dual-Method Explainability Engine (XAI)
 **Objective:** Resolve the Black Box paradigm.
 **Methodology:** O.M.N.I. synthesizes two distinct analytical approaches to rank feature importance:
 1. **Permutation Importance:** A combinatorial metric evaluating the degradation of predictive power when individual feature vectors are randomly shuffled.
@@ -124,7 +146,7 @@ S_i = \mathbb{E} \left| \frac{\partial y}{\partial x_i} \right|
 ```
 **Result:** The integrated normalized metric isolates the critical structural drivers of the latent representation, exporting the data to comprehensive combinatorial ranking matrices.
 
-### 6.7 Neuromorphic Spiking Vision (DVS SNN Omega v5/v6)
+### 5.7 Neuromorphic Spiking Vision (DVS SNN Omega v5/v6)
 **Objective:** Engineer an ultra-low latency, energy-efficient vision processor capable of interpreting asynchronous event-based camera streams, bypassing the "frame-rate" bottlenecks and massive energy consumption of classical Convolutional Neural Networks (CNNs).
 
 **Cause & Ideation (The "Musical Confusion" Crisis):** Standard CNNs waste immense computational cycles processing static, redundant backgrounds. Neuromorphic hardware, like the Dynamic Vision Sensor (DVS), only records *changes* in light intensity at the microsecond level, creating a hyper-sparse, asynchronous data stream. During early prototyping, our baseline SNN architecture hit a hard accuracy ceiling of 64%. Extensive introspection revealed a "Musical Gesture Confusion" bottleneck: the model was entirely failing to differentiate between high-frequency, localized motions like "Air Guitar" and "Air Drums" because temporal spikes were being linearly smeared across the latent space. To interface with this raw event stream correctly, we required a mathematically pure Spiking Neural Network (SNN) that processes temporal spikes natively and routes gradients precisely.
@@ -143,7 +165,7 @@ To shatter the 64% accuracy plateau and push toward the >96% benchmark, O.M.N.I.
 **Dataset:** IBM DVS128 Gesture Dataset (11-class gesture recognition).
 **Citation:** Amir, A., Taba, B., Berg, D., Melano, T., McKinstry, J., Di Nolfo, C., ... & Modha, D. S. (2017). *A Low Power, Fully Event-Based Gesture Recognition System*. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR).
 
-### 6.8 Particle Physics Discovery (HIGGS Omega v2)
+### 5.8 Particle Physics Discovery (HIGGS Omega v2)
 **Objective:** Scale the O.M.N.I. framework to handle massive, multi-million-row datasets necessary for detecting beyond-standard-model particles (like the Higgs Boson) without triggering memory allocation faults or excessive text-parsing bottlenecks.
 
 **Cause & Ideation (The I/O Bottleneck Crisis):** When processing the 11-million row HIGGS dataset, standard `.csv` parsing was identified as a critical systemic failure point. The CPU spent 90% of its cycles parsing strings to floats, stalling the GPU/training loop. The dataset simply could not fit into RAM simultaneously. We required a robust, C-level binary data streaming mechanism capable of feeding the compute units instantaneously.
@@ -155,7 +177,7 @@ To shatter the 64% accuracy plateau and push toward the >96% benchmark, O.M.N.I.
 **Dataset:** UCI HIGGS Dataset (11,000,000 simulated particle collision events).
 **Citation:** Baldi, P., Sadowski, P., & Whiteson, D. (2014). *Searching for Exotic Particles in High-Energy Physics with Deep Learning*. Nature Communications, 5(1), 4308.
 
-### 6.9 High-Frequency Financial Intelligence (Omega & Robust Hebbian)
+### 5.9 High-Frequency Financial Intelligence (Omega & Robust Hebbian)
 **Objective:** Predict highly stochastic, non-stationary financial asset trajectories in real-time.
 
 **Cause & Ideation (The Regime Shift Vulnerability):** Traditional recurrent networks (RNNs/LSTMs) suffer from vanishing gradients over long financial time horizons and absolutely fail to adapt to sudden market volatility or "regime shifts." Backpropagation is too slow to adapt to a sudden flash crash.
@@ -163,7 +185,7 @@ To shatter the 64% accuracy plateau and push toward the >96% benchmark, O.M.N.I.
 **Methodology & Engineering Execution:** 
 The implementation of **Robust Hebbian Learning** mixed with dynamic Liquid State processing. The network is capable of **Unsupervised Synaptic Plasticity**. Based on localized input correlations (Hebbian theory: "Neurons that fire together, wire together"), the network autonomously strengthens or weakens its own synaptic weights during the forward pass, *independent* of the global backpropagation loss. This allows the financial engine to perform instantaneous, localized adaptations to sudden market shifts before the backward pass even occurs.
 
-### 6.10 Continuous Medical Telemetry (ECG Liquid NN)
+### 5.10 Continuous Medical Telemetry (ECG Liquid NN)
 **Objective:** Process continuous time-series biodata (electrocardiograms) for anomaly detection.
 
 **Cause & Ideation:** Biological heartbeats do not occur at perfectly spaced intervals. Standard RNNs assume fixed time-steps, forcing engineers to artificially interpolate or compress irregular medical data, corrupting the signal.
