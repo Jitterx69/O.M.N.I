@@ -306,24 +306,70 @@ O.M.N.I. Root
 └── results/                     # Quantitative output telemetry
 ```
 
-### Execution Commands
-The environment requires a standard installation of the Julia compiler. No external package initialization is required. 
+## Execution Protocol
 
-To execute the sequential processing pipeline incorporating neuroevolution, physical pruning, explainability, and Bayesian uncertainty quantification:
+Project O.M.N.I. requires a standard installation of the Julia compiler (v1.10+ recommended). Due to the zero-dependency philosophy, no external package initialization or `Pkg.add()` calls are required for the core mathematical engines.
+
+### Multi-Threaded Execution
+To maximize the throughput of our native `@simd` and Binary Mmap engines, it is highly recommended to execute O.M.N.I. with multiple threads enabled. This allows the framework to parallelize matrix operations across all available physical CPU cores.
 ```bash
-julia scripts/run_pipeline.jl
+export JULIA_NUM_THREADS=auto
 ```
 
-To initialize and evaluate the experimental non-linear continuous architectures independently:
+### Core Model Training & Evolution
+To execute the primary sequential processing pipeline—incorporating Neuroevolutionary Topology Search, Iterative Magnitude Pruning, Dual-Method Explainability, and Bayesian Uncertainty Quantification:
+```bash
+julia scripts/core/run_pipeline.jl
+```
 
-**Kolmogorov-Arnold Network Validation:**
+### Domain-Specific "Iron" Pipelines
+Each domain-specific module is engineered as a standalone high-performance engine capable of independent execution.
+
+**Neuromorphic Vision (DVS Spiking SNN):**
+*Optimized for ultra-low latency gesture recognition utilizing Focal Spiking Loss and WTA Backprop.*
+```bash
+julia scripts/dvs/dvs_snn_v4_pipeline.jl
+```
+
+**Particle Physics Discovery (HIGGS Binary Mmap):**
+*Requires pre-processing the massive UCI dataset into the optimized O.M.N.I. Binary format to bypass I/O bottlenecks.*
+```bash
+# Pre-process raw CSV to high-speed .bin struct
+julia scripts/higgs/preprocess_higgs.jl
+
+# Execute 11-million row training loop with native AUC tracking
+julia scripts/higgs/higgs_omega_v2_pipeline.jl
+```
+
+**High-Frequency Financial Intelligence:**
+*Executes robust Hebbian adaptation and unsupervised synaptic plasticity on non-stationary market manifolds.*
+```bash
+julia scripts/finance/finance_omega_pipeline.jl
+```
+
+**Continuous Medical Telemetry (ECG Liquid NN):**
+*Models irregular physiological signals via continuous-time differential equations bound by biological time constants.*
+```bash
+julia scripts/medical/ecg_liquid_pipeline.jl
+```
+
+### Experimental Architecture Validation
+To evaluate the foundational non-linear continuous architectures independently:
+
+**Chebyshev Kolmogorov-Arnold Network (KAN):**
 ```bash
 julia src/experimental/kan.jl
 ```
 
-**Continuous-Depth Neural ODE Validation:**
+**Continuous-Depth Neural ODE:**
 ```bash
 julia src/experimental/neural_ode.jl
+```
+
+### Production Deployment & Weight Export
+To export learned weights and optimized topologies into the ultra-compressed `.omni` binary format for standalone "Iron" deployment on edge devices:
+```bash
+julia scripts/deploy/deploy_pipeline.jl
 ```
 
 ---
