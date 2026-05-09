@@ -237,7 +237,7 @@ end
 
 function fwd_lif!(blk::LIFBlock, X_seq::Array{Float64, 3}; training=false)
     no, B, T = size(X_seq)
-    blk.layer.inp = X_seq
+    blk.inp = X_seq
     blk.U = zeros(no, B, T+1)
     blk.S = zeros(no, B, T)
     
