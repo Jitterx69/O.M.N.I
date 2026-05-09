@@ -1,7 +1,7 @@
 using Statistics, Random, Printf, Dates
 
 const DVS_PROJECT_DIR = dirname(@__DIR__)
-const DVS_DATA_DIR = joinpath(DVS_PROJECT_DIR, "data", "DVS  Gesture dataset", "DvsGesture")
+const DVS_DATA_DIR = joinpath(DVS_PROJECT_DIR, "data", "DVS Gesture dataset", "DvsGesture")
 const DVS_RES = 128
 const DVS_DOWN = 4
 const DVS_RES_DOWN = div(DVS_RES, DVS_DOWN)
