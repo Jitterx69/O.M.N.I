@@ -364,7 +364,7 @@ Each domain-specific module is engineered as a standalone high-performance engin
 **Neuromorphic Vision (DVS Spiking SNN):**
 *Optimized for ultra-low latency gesture recognition utilizing Focal Spiking Loss and WTA Backprop.*
 ```bash
-julia scripts/dvs/dvs_snn_v4_pipeline.jl
+julia scripts/dvs/dvs_snn_omega_v6.jl
 ```
 
 **Particle Physics Discovery (HIGGS Binary Mmap):**
