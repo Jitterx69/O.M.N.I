@@ -236,29 +236,25 @@ function LIFBlock(ni, no)
 end
 
 function fwd_lif!(blk::LIFBlock, X_seq::Array{Float64, 3}; training=false)
-    no, B, T = size(X_seq)
+    ni, B, T = size(X_seq)
+    no = blk.layer.no
     blk.inp = X_seq
     blk.U = zeros(no, B, T+1)
     blk.S = zeros(no, B, T)
     
     v_th = blk.v_th
     @inbounds for t in 1:T
-        # Potential accumulation
+        curr = blk.layer.W * X_seq[:, :, t] .+ blk.layer.b
         for b in 1:B, n in 1:no
-            blk.U[n, b, t+1] = blk.U[n, b, t] * V_LEAK + X_seq[n, b, t] * (1.0 - V_LEAK)
+            blk.U[n, b, t+1] = blk.U[n, b, t] * V_LEAK + curr[n, b] * (1.0 - V_LEAK)
         end
         
-        # Thresholding
         spikes = Float64.(blk.U[:, :, t+1] .> v_th)
-        
         if training
             mask = rand(no, B) .> SPIKE_DROPOUT
             spikes .*= mask
         end
-        
         blk.S[:, :, t] .= spikes
-        
-        # Soft Reset
         for b in 1:B, n in 1:no
             blk.U[n, b, t+1] -= spikes[n, b] * v_th
         end
