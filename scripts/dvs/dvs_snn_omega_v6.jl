@@ -24,12 +24,12 @@ end
 mutable struct SpikeConv
     in_ch::Int; out_ch::Int
     k::Int; pad::Int
-    W::Array{Float64, 4} # (out, in, k, k)
+    W::Array{Float64, 4} 
     b::Vector{Float64}
     dW::Array{Float64, 4}; db::Vector{Float64}
     mW::Array{Float64, 4}; vW::Array{Float64, 4}
     mb::Vector{Float64}; vb::Vector{Float64}
-    inp::Array{Float64, 5} # Store for BWD
+    inp::Array{Float64, 5}
 end
 
 function SpikeConv(in_ch, out_ch, k; pad=1)
@@ -232,7 +232,7 @@ mutable struct LIFBlock
 end
 
 function LIFBlock(ni, no)
-    LIFBlock(SpikeDense(ni, no), zeros(0,0,0), zeros(0,0,0), V_THRESHOLD)
+    LIFBlock(SpikeDense(ni, no), zeros(0,0,0), zeros(0,0,0), zeros(0,0,0), V_THRESHOLD)
 end
 
 function fwd_lif!(blk::LIFBlock, X_seq::Array{Float64, 3}; training=false)
