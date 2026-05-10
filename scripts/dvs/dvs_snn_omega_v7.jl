@@ -28,8 +28,10 @@ mutable struct tdBN
     running_var::Array{Float64, 4}
     momentum::Float64
     m_gamma::Array{Float64, 4}; v_gamma::Array{Float64, 4}
-    m_beta::Array{Float64, 4}; v_beta::Array{Float64, 4}
     d_gamma::Array{Float64, 4}; d_beta::Array{Float64, 4}
+    U_hat::Array{Float64, 5} 
+    mu_batch::Array{Float64, 5}
+    var_batch::Array{Float64, 5}
 end
 
 function tdBN(C)
@@ -37,22 +39,57 @@ function tdBN(C)
          zeros(1, C, 1, 1), ones(1, C, 1, 1), 0.1,
          zeros(1, C, 1, 1), zeros(1, C, 1, 1),
          zeros(1, C, 1, 1), zeros(1, C, 1, 1),
-         zeros(1, C, 1, 1), zeros(1, C, 1, 1))
+         zeros(1, C, 1, 1), zeros(1, C, 1, 1),
+         zeros(0,0,0,0,0))
 end
 
 function apply_tdbn!(bn::tdBN, U::Array{Float64, 5}, V_th, training)
     B, C, H, W, T = size(U)
-    if training
-        mu = mean(U, dims=(1, 3, 4, 5))
-        var_val = var(U, dims=(1, 3, 4, 5))
-        bn.running_mean = (1 - bn.momentum) .* bn.running_mean .+ bn.momentum .* mu
-        bn.running_var = (1 - bn.momentum) .* bn.running_var .+ bn.momentum .* var_val
-    else
-        mu = bn.running_mean
-        var_val = bn.running_var
+    bn.U_hat = zeros(size(U))
+    bn.mu_batch = zeros(1, C, 1, 1, T)
+    bn.var_batch = zeros(1, C, 1, 1, T)
+    out = zeros(size(U))
+    for t in 1:T
+        u_t = U[:, :, :, :, t]
+        if training
+            mu = mean(u_t, dims=(1, 3, 4))
+            v_val = var(u_t, dims=(1, 3, 4))
+            bn.mu_batch[:, :, :, :, t] .= mu
+            bn.var_batch[:, :, :, :, t] .= v_val
+            bn.running_mean .= (1 - bn.momentum) .* bn.running_mean .+ bn.momentum .* mu
+            bn.running_var .= (1 - bn.momentum) .* bn.running_var .+ bn.momentum .* v_val
+        else
+            mu = bn.running_mean
+            v_val = bn.running_var
+        end
+        bn.U_hat[:, :, :, :, t] = (u_t .- mu) ./ sqrt.(v_val .+ 1e-5)
+        out[:, :, :, :, t] = V_th .* bn.gamma .* bn.U_hat[:, :, :, :, t] .+ bn.beta
     end
-    U_norm = (U .- mu) ./ sqrt.(var_val .+ 1e-5)
-    return V_th .* bn.gamma .* U_norm .+ bn.beta
+    return out
+end
+
+function bwd_tdbn!(bn::tdBN, dY::Array{Float64, 5})
+    B, C, H, W, T = size(dY)
+    N = B * H * W
+    dX = zeros(size(dY))
+    bn.d_gamma .= 0.0; bn.d_beta .= 0.0
+    for t in 1:T
+        dy = dY[:, :, :, :, t]
+        uh = bn.U_hat[:, :, :, :, t]
+        # Use batch stats if available (training), else running
+        mu = size(bn.mu_batch, 5) >= t ? bn.mu_batch[:,:,:,:,t] : bn.running_mean
+        v_val = size(bn.var_batch, 5) >= t ? bn.var_batch[:,:,:,:,t] : bn.running_var
+        
+        bn.d_gamma .+= reshape(sum(dy .* uh, dims=(1, 3, 4)), 1, C, 1, 1) .* V_THRESHOLD
+        bn.d_beta .+= reshape(sum(dy, dims=(1, 3, 4)), 1, C, 1, 1)
+        
+        duh = dy .* bn.gamma .* V_THRESHOLD
+        inv_std = 1.0 ./ sqrt.(v_val .+ 1e-5)
+        dvar = sum(duh .* (bn.U_hat[:,:,:,:,t] .* sqrt.(v_val .+ 1e-5)) .* (-0.5) .* (inv_std .^ 3), dims=(1, 3, 4))
+        dmu = sum(-duh .* inv_std, dims=(1, 3, 4)) .+ dvar .* mean(-2.0 .* (bn.U_hat[:,:,:,:,t] .* sqrt.(v_val .+ 1e-5)), dims=(1,3,4))
+        dX[:, :, :, :, t] = duh .* inv_std .+ (dvar .* 2.0 ./ N) .* (bn.U_hat[:,:,:,:,t] .* sqrt.(v_val .+ 1e-5)) .+ dmu ./ N
+    end
+    return dX
 end
 
 mutable struct SpikeConv
@@ -139,7 +176,9 @@ function augment_dvs(X_b::Matrix{Float64}, res, T)
     X_tensor = reshape(X_aug, 2, res, res, T, B)
     for b in 1:B
         if rand() > 0.5
-            X_tensor[1, :, :, :, b], X_tensor[2, :, :, :, b] = X_tensor[2, :, :, :, b], X_tensor[1, :, :, :, b]
+            tmp = copy(X_tensor[1, :, :, :, b])
+            X_tensor[1, :, :, :, b] .= X_tensor[2, :, :, :, b]
+            X_tensor[2, :, :, :, b] .= tmp
         end
         if rand() > 0.5
             X_tensor[:, :, end:-1:1, :, b] = X_tensor[:, :, :, :, b]
@@ -161,10 +200,12 @@ function conv2d(X::Array{Float64, 4}, W::Array{Float64, 4}, b::Vector{Float64}, 
     X_pad = zeros(B, IC, H + 2pad, W_in + 2pad)
     X_pad[:, :, pad+1:H+pad, pad+1:W_in+pad] .= X
     out = zeros(B, OC, H_out, W_out)
-    for row in 1:H_out, col in 1:W_out
-        for i in 1:k, j in 1:k
-            for ic in 1:IC
-                out[:, :, row, col] .+= X_pad[:, ic, row+i-1, col+j-1] * W[:, ic, i, j]'
+    for ic in 1:IC, i in 1:k, j in 1:k
+        W_slice = W[:, ic, i, j]
+        for row in 1:H_out, col in 1:W_out
+            val = X_pad[:, ic, row+i-1, col+j-1]
+            for oc in 1:OC, b in 1:B
+                out[b, oc, row, col] += val[b] * W_slice[oc]
             end
         end
     end
@@ -185,11 +226,12 @@ function conv2d_grad(X::Array{Float64, 4}, W::Array{Float64, 4}, d_out::Array{Fl
     dX_pad = zeros(size(X_pad))
     for oc in 1:OC
         d_out_oc = d_out[:, oc, :, :]
+        db[oc] = mean(d_out_oc)
         for ic in 1:IC
             for i in 1:k, j in 1:k
                 slice = X_pad[:, ic, i:i+H_out-1, j:j+W_out-1]
-                dW[oc, ic, i, j] = sum(d_out_oc .* slice)
-                dX_pad[:, ic, i:i+H_out-1, j:j+W_out-1] .+= W[oc, ic, i, j] .* d_out_oc
+                dW[oc, ic, i, j] = mean(d_out_oc .* slice)
+                dX_pad[:, ic, i:i+H_out-1, j:j+W_out-1] .+= W[oc, ic, i, j] .* d_out_oc ./ (H_out * W_out)
             end
         end
     end
@@ -205,15 +247,19 @@ function fwd_conv_lif!(blk::ConvLIFBlock, X_seq::Array{Float64, 5}; training=fal
     for t in 1:T
         conv_out[:, :, :, :, t] = conv2d(X_seq[:, :, :, :, t], blk.conv.W, blk.conv.b, blk.conv.pad)
     end
-    U_bn = apply_tdbn!(blk.bn, conv_out, V_THRESHOLD, training)
+    
+    # tdBN on synaptic input current per Zheng et al. 2020
+    I_bn = apply_tdbn!(blk.bn, conv_out, V_THRESHOLD, training)
+    
     blk.U = zeros(B, OC, H, W, T + 1)
     blk.S = zeros(B, OC, H, W, T)
     blk.mask = ones(B, OC, H, W, T)
-    blk.v_th_hist = fill(V_THRESHOLD, T)
-    @inbounds for t in 1:T
+    
+    for t in 1:T
         for b in 1:B, c in 1:OC, i in 1:H, j in 1:W
-            blk.U[b, c, i, j, t+1] = blk.U[b, c, i, j, t] * V_LEAK + U_bn[b, c, i, j, t]
+            blk.U[b, c, i, j, t+1] = blk.U[b, c, i, j, t] * V_LEAK + I_bn[b, c, i, j, t]
         end
+        
         spikes = Float64.(blk.U[:, :, :, :, t+1] .> V_THRESHOLD)
         if training
             mask = rand(B, OC, H, W) .> SPIKE_DROPOUT
@@ -221,10 +267,11 @@ function fwd_conv_lif!(blk::ConvLIFBlock, X_seq::Array{Float64, 5}; training=fal
             blk.mask[:, :, :, :, t] = Float64.(mask)
         end
         blk.S[:, :, :, :, t] .= spikes
+        
+        # Soft reset on raw membrane
         for b in 1:B, c in 1:OC, i in 1:H, j in 1:W
             blk.U[b, c, i, j, t+1] -= spikes[b, c, i, j] * V_THRESHOLD
         end
-        blk.v_th_hist[t] = V_THRESHOLD
     end
     return blk.S
 end
@@ -232,16 +279,21 @@ end
 function bwd_conv_lif!(blk::ConvLIFBlock, dS::Array{Float64, 5}, lambda::Float64, clip::Float64)
     B, OC, H, W, T = size(dS)
     dU = zeros(B, OC, H, W)
-    dU_bn_seq = zeros(B, OC, H, W, T)
+    dI_bn = zeros(B, OC, H, W, T)
     dS_masked = dS .* blk.mask
+    
     for t in T:-1:1
-        grad_s = surrogate_grad.(blk.U[:, :, :, :, t+1] .- blk.v_th_hist[t])
-        dU_curr = dS_masked[:, :, :, :, t] .+ dU .* V_LEAK
-        dU_fire = dU_curr .* grad_s
-        dU_bn_seq[:, :, :, :, t] = dU_fire
-        dU = dU_curr .- dU_fire .* blk.v_th_hist[t]
+        # Correct surrogate operating point on raw membrane
+        grad_s = surrogate_grad.(blk.U[:, :, :, :, t+1] .- V_THRESHOLD)
+        dU_curr = dS_masked[:, :, :, :, t] .* grad_s .+ dU .* V_LEAK
+        dI_bn[:, :, :, :, t] .= dU_curr
+        # Recurrent gradient for soft reset: ∂U_after/∂U_before = 1
+        dU = dU_curr
     end
-    return bwd_conv!(blk.conv, dU_bn_seq, lambda, clip, T)
+    
+    # Gradient through tdBN back to conv
+    dI_raw = bwd_tdbn!(blk.bn, dI_bn)
+    return bwd_conv!(blk.conv, dI_raw, lambda, clip, T)
 end
 
 function bwd_conv!(l::SpikeConv, d_out_seq::Array{Float64, 5}, lambda::Float64, clip::Float64, T::Int)
@@ -250,9 +302,9 @@ function bwd_conv!(l::SpikeConv, d_out_seq::Array{Float64, 5}, lambda::Float64, 
     dX_seq = zeros(size(l.inp))
     for t in 1:T
         dw, db, dx = conv2d_grad(l.inp[:, :, :, :, t], l.W, d_out_seq[:, :, :, :, t], l.pad)
-        l.dW .+= dw ./ (B * T)
-        l.db .+= db ./ (B * T)
-        dX_seq[:, :, :, :, t] = dx
+        l.dW .+= dw ./ T
+        l.db .+= db ./ T
+        dX_seq[:, :, :, :, t] .= dx
     end
     l.dW .+= lambda .* l.W
     gnorm = sqrt(sum(l.dW.^2) + sum(l.db.^2))
@@ -265,7 +317,7 @@ end
 function fwd_res_block!(res::SpikeResBlock, X::Array{Float64, 5}; training=false)
     out1 = fwd_conv_lif!(res.blk1, X; training=training)
     out2 = fwd_conv_lif!(res.blk2, out1; training=training)
-    return out2 .+ X
+    return min.(out2 .+ X, 1.0)
 end
 
 function bwd_res_block!(res::SpikeResBlock, dOut::Array{Float64, 5}, lambda::Float64, clip::Float64)
@@ -292,8 +344,8 @@ function fwd_pool!(p::SpikePool, S::Array{Float64, 5})
         for b in 1:B
             val, idx = findmax(patch[b, :, :])
             out[b, c, i, j, t] = val
-            p.argmax_idx[b, c, i, j, t, 1] = (idx[1]-1) * 2 + (2i-1)
-            p.argmax_idx[b, c, i, j, t, 2] = (idx[2]-1) * 2 + (2j-1)
+            p.argmax_idx[b, c, i, j, t, 1] = 2i - 2 + idx[1]
+            p.argmax_idx[b, c, i, j, t, 2] = 2j - 2 + idx[2]
         end
     end
     return out
@@ -349,9 +401,9 @@ function bwd_lif!(blk::LIFBlock, dS::Array{Float64, 3}, lambda::Float64, clip::F
         dU_curr = dS_masked[:, :, t] .+ dU .* V_LEAK
         dI = dU_curr .* grad_s
         l.dW .+= (dI * blk.inp[:, :, t]') ./ (B * T)
-        l.db .+= vec(mean(dI, dims=2))
+        l.db .+= vec(mean(dI, dims=2)) ./ T
         dX[:, :, t] = l.W' * dI
-        dU = dU_curr .- dI .* V_THRESHOLD
+        dU = dU_curr
     end
     l.dW .+= lambda .* l.W
     gnorm = sqrt(sum(l.dW.^2) + sum(l.db.^2))
@@ -494,6 +546,13 @@ function run_dvs_omega_v7()
     test_list = read_trial_list(joinpath(DVS_DATA_DIR, "trials_to_test.txt"))
     X_train, y_train = load_split(train_list, SNN_T_STEPS)
     X_test, y_test = load_split(test_list, SNN_T_STEPS)
+    
+    # Sanity Check
+    X_sample = reshape(X_train[:, 1], 2, DVS_RES_DOWN, DVS_RES_DOWN, SNN_T_STEPS)
+    pol1 = sum(X_sample[1, :, :, :]); pol2 = sum(X_sample[2, :, :, :])
+    println(">> Data Sanity: Polarity 1: $pol1, Polarity 2: $pol2")
+    if pol1 == pol2; println("!! WARNING: Polarities are identical. Check loader."); end
+    
     counts = zeros(11); for l in y_train; counts[l] += 1; end
     weights = sum(counts) ./ (11 .* max.(counts, 1.0))
     epochs = 300
@@ -502,6 +561,12 @@ function run_dvs_omega_v7()
     net = GestureSNNv7()
     best_acc = 0.0; step = 0; start_epoch = 1
     checkpoint_path = "dvs_omega_v7_checkpoint.jls"
+    if isfile(checkpoint_path)
+        println(">> Resuming from checkpoint...")
+        cp = deserialize(checkpoint_path)
+        net = cp.net; best_acc = cp.best_acc; step = cp.step; start_epoch = cp.epoch + 1
+    end
+    
     for ep in start_epoch:epochs
         peak_lr = 5e-3
         if ep <= 10
@@ -518,18 +583,23 @@ function run_dvs_omega_v7()
             y_b = y_train[idx]
             y_oh = zeros(11, length(y_b))
             for (j, l) in enumerate(y_b); y_oh[l, j] = 1.0; end
+            
             y_pred = forward_v7!(net, X_b)
             backward_v7!(net, y_oh, y_pred, weights; lr=lr)
             adam_step_v7!(net, lr, step)
         end
+        
         if ep == 1 || ep % 2 == 0
             net.training = false
             y_pred_te = forward_v7!(net, X_test)
             preds_te = [argmax(y_pred_te[:, i]) for i in 1:size(y_pred_te, 2)]
             acc = mean(preds_te .== y_test)
+            
             if acc > best_acc; best_acc = acc; end
-            @printf("  Epoch %3d | Test Acc: %5.2f%% (Best: %5.2f%%) | LR: %7.5f | Firing: %5.2f%%\n", 
-                    ep, acc*100, best_acc*100, lr, mean(net.stem.S)*100)
+            blocks = [net.stem, net.res1.blk1, net.res2a.blk1, net.res3.blk1]
+            f_rates = [mean(b.S) for b in blocks]
+            @printf("  Epoch %3d | Test Acc: %5.2f%% (Best: %5.2f%%) | LR: %7.5f | Firing: %s\n", 
+                    ep, acc*100, best_acc*100, lr, join([@sprintf("%.1f%%", f*100) for f in f_rates], " / "))
             serialize(checkpoint_path, (net=net, best_acc=best_acc, step=step, epoch=ep))
         end
     end
