@@ -1,7 +1,7 @@
 using Serialization, Statistics, Random, Printf, Dates, LinearAlgebra
 include("../../src/dvs_loader.jl")
 
-const SURROGATE_SCALE = 4.0
+const SURROGATE_SCALE = 10.0
 const V_THRESHOLD = 1.0
 const V_LEAK = 0.9
 const SNN_T_STEPS = 20
@@ -22,14 +22,14 @@ function softmax_s(X)
 end
 
 mutable struct tdBN
-    gamma::Array{Float64, 4}
-    beta::Array{Float64, 4}
-    running_mean::Array{Float64, 4}
-    running_var::Array{Float64, 4}
+    gamma::Array{Float64, 4}; beta::Array{Float64, 4}
+    running_mean::Array{Float64, 4}; running_var::Array{Float64, 4}
     momentum::Float64
     m_gamma::Array{Float64, 4}; v_gamma::Array{Float64, 4}
+    m_beta::Array{Float64, 4}; v_beta::Array{Float64, 4}
     d_gamma::Array{Float64, 4}; d_beta::Array{Float64, 4}
-    U_hat::Array{Float64, 5} 
+    # Cache for backward pass
+    X_raw::Array{Float64, 5}
     mu_batch::Array{Float64, 5}
     var_batch::Array{Float64, 5}
 end
@@ -40,58 +40,60 @@ function tdBN(C)
          zeros(1, C, 1, 1), zeros(1, C, 1, 1),
          zeros(1, C, 1, 1), zeros(1, C, 1, 1),
          zeros(1, C, 1, 1), zeros(1, C, 1, 1),
-         zeros(0,0,0,0,0))
+         zeros(0,0,0,0,0), zeros(0,0,0,0,0), zeros(0,0,0,0,0))
 end
 
-function apply_tdbn!(bn::tdBN, U::Array{Float64, 5}, V_th, training)
-    B, C, H, W, T = size(U)
-    bn.U_hat = zeros(size(U))
+function apply_tdbn!(bn::tdBN, X::Array{Float64, 5}, V_th, training)
+    B, C, H, W, T = size(X)
+    bn.X_raw = zeros(size(X))
     bn.mu_batch = zeros(1, C, 1, 1, T)
     bn.var_batch = zeros(1, C, 1, 1, T)
-    out = zeros(size(U))
+    out = zeros(size(X))
     for t in 1:T
-        u_t = U[:, :, :, :, t]
+        x_t = X[:, :, :, :, t]
         if training
-            mu = mean(u_t, dims=(1, 3, 4))
-            v_val = var(u_t, dims=(1, 3, 4))
+            mu = mean(x_t, dims=(1, 3, 4))
+            v_val = var(x_t, dims=(1, 3, 4), corrected=false) # N-denominator for BN
             bn.mu_batch[:, :, :, :, t] .= mu
             bn.var_batch[:, :, :, :, t] .= v_val
+            bn.X_raw[:, :, :, :, t] .= x_t
             bn.running_mean .= (1 - bn.momentum) .* bn.running_mean .+ bn.momentum .* mu
             bn.running_var .= (1 - bn.momentum) .* bn.running_var .+ bn.momentum .* v_val
         else
             mu = bn.running_mean
             v_val = bn.running_var
         end
-        bn.U_hat[:, :, :, :, t] = (u_t .- mu) ./ sqrt.(v_val .+ 1e-5)
-        out[:, :, :, :, t] = V_th .* bn.gamma .* bn.U_hat[:, :, :, :, t] .+ bn.beta
+        inv_std = 1.0 ./ sqrt.(v_val .+ 1e-5)
+        out[:, :, :, :, t] = V_th .* bn.gamma .* ((x_t .- mu) .* inv_std) .+ bn.beta
     end
     return out
 end
 
-function bwd_tdbn!(bn::tdBN, dY::Array{Float64, 5})
+function bwd_tdbn!(bn::tdBN, dY::Array{Float64, 5}, V_th)
     B, C, H, W, T = size(dY)
     N = B * H * W
     dX = zeros(size(dY))
     bn.d_gamma .= 0.0; bn.d_beta .= 0.0
     for t in 1:T
         dy = dY[:, :, :, :, t]
-        uh = bn.U_hat[:, :, :, :, t]
-        # Use batch stats if available (training), else running
-        mu = size(bn.mu_batch, 5) >= t ? bn.mu_batch[:,:,:,:,t] : bn.running_mean
-        v_val = size(bn.var_batch, 5) >= t ? bn.var_batch[:,:,:,:,t] : bn.running_var
+        mu = bn.mu_batch[:, :, :, :, t]
+        v_val = bn.var_batch[:, :, :, :, t]
+        x_raw = bn.X_raw[:, :, :, :, t]
         
-        bn.d_gamma .+= reshape(sum(dy .* uh, dims=(1, 3, 4)), 1, C, 1, 1) .* V_THRESHOLD
+        inv_std = 1.0 ./ sqrt.(v_val .+ 1e-5)
+        x_hat = (x_raw .- mu) .* inv_std
+        
+        bn.d_gamma .+= reshape(sum(dy .* x_hat, dims=(1, 3, 4)), 1, C, 1, 1) .* V_th
         bn.d_beta .+= reshape(sum(dy, dims=(1, 3, 4)), 1, C, 1, 1)
         
-        duh = dy .* bn.gamma .* V_THRESHOLD
-        inv_std = 1.0 ./ sqrt.(v_val .+ 1e-5)
-        dvar = sum(duh .* (bn.U_hat[:,:,:,:,t] .* sqrt.(v_val .+ 1e-5)) .* (-0.5) .* (inv_std .^ 3), dims=(1, 3, 4))
-        dmu = sum(-duh .* inv_std, dims=(1, 3, 4)) .+ dvar .* mean(-2.0 .* (bn.U_hat[:,:,:,:,t] .* sqrt.(v_val .+ 1e-5)), dims=(1,3,4))
-        dX[:, :, :, :, t] = duh .* inv_std .+ (dvar .* 2.0 ./ N) .* (bn.U_hat[:,:,:,:,t] .* sqrt.(v_val .+ 1e-5)) .+ dmu ./ N
+        # dy_dx_hat * dx_hat_dx
+        duh = dy .* bn.gamma .* V_th
+        dvar = sum(duh .* (x_raw .- mu) .* (-0.5) .* (inv_std .^ 3), dims=(1, 3, 4))
+        dmu = sum(-duh .* inv_std, dims=(1, 3, 4)) .+ dvar .* (-2.0 ./ N) .* sum(x_raw .- mu, dims=(1, 3, 4))
+        dX[:, :, :, :, t] = duh .* inv_std .+ (dvar .* 2.0 ./ N) .* (x_raw .- mu) .+ dmu ./ N
     end
     return dX
 end
-
 mutable struct SpikeConv
     in_ch::Int; out_ch::Int
     k::Int; pad::Int
@@ -100,6 +102,8 @@ mutable struct SpikeConv
     mW::Array{Float64, 4}; vW::Array{Float64, 4}
     mb::Vector{Float64}; vb::Vector{Float64}
     inp::Array{Float64, 5}
+    # Per-layer scratch buffer to avoid cross-layer corruption
+    X_col::Array{Float64, 2}
 end
 
 function SpikeConv(in_ch, out_ch, k; pad=1)
@@ -109,7 +113,7 @@ function SpikeConv(in_ch, out_ch, k; pad=1)
         zeros(out_ch, in_ch, k, k), zeros(out_ch),
         zeros(out_ch, in_ch, k, k), zeros(out_ch, in_ch, k, k),
         zeros(out_ch), zeros(out_ch),
-        zeros(0,0,0,0,0))
+        zeros(0,0,0,0,0), zeros(in_ch*k*k, 32768)) # 32768 = 32*32*32 (B*H*W)
 end
 
 mutable struct SpikeDense
@@ -161,14 +165,6 @@ function LIFBlock(ni, no)
     LIFBlock(SpikeDense(ni, no), zeros(0,0,0), zeros(0,0,0), zeros(0,0,0), zeros(0), zeros(0,0,0))
 end
 
-mutable struct SpikeResBlock
-    blk1::ConvLIFBlock
-    blk2::ConvLIFBlock
-end
-
-function SpikeResBlock(C)
-    SpikeResBlock(ConvLIFBlock(C, C, 3; pad=1), ConvLIFBlock(C, C, 3; pad=1))
-end
 
 function augment_dvs(X_b::Matrix{Float64}, res, T)
     B = size(X_b, 2)
@@ -181,11 +177,11 @@ function augment_dvs(X_b::Matrix{Float64}, res, T)
             X_tensor[2, :, :, :, b] .= tmp
         end
         if rand() > 0.5
-            X_tensor[:, :, end:-1:1, :, b] = X_tensor[:, :, :, :, b]
+            X_tensor[:, :, :, :, b] .= X_tensor[:, :, end:-1:1, :, b]
         end
         shift = rand(-2:2)
         if shift != 0
-            X_tensor[:, :, :, :, b] = circshift(X_tensor[:, :, :, :, b], (0, 0, 0, shift))
+            X_tensor[:, :, :, :, b] .= circshift(X_tensor[:, :, :, :, b], (0, 0, 0, shift))
         end
         mask = rand(size(X_tensor[:, :, :, :, b])...) .> 0.1
         X_tensor[:, :, :, :, b] .*= mask
@@ -193,48 +189,60 @@ function augment_dvs(X_b::Matrix{Float64}, res, T)
     return reshape(X_tensor, :, B)
 end
 
-function conv2d(X::Array{Float64, 4}, W::Array{Float64, 4}, b::Vector{Float64}, pad::Int)
+function conv2d!(out::Array{Float64, 4}, X::Array{Float64, 4}, W::Array{Float64, 4}, b::Vector{Float64}, pad::Int, X_col::Array{Float64, 2})
     B, IC, H, W_in = size(X)
     OC, _, k, _ = size(W)
     H_out, W_out = H + 2pad - k + 1, W_in + 2pad - k + 1
     X_pad = zeros(B, IC, H + 2pad, W_in + 2pad)
     X_pad[:, :, pad+1:H+pad, pad+1:W_in+pad] .= X
-    out = zeros(B, OC, H_out, W_out)
-    for ic in 1:IC, i in 1:k, j in 1:k
-        W_slice = W[:, ic, i, j]
-        for row in 1:H_out, col in 1:W_out
-            val = X_pad[:, ic, row+i-1, col+j-1]
-            for oc in 1:OC, b in 1:B
-                out[b, oc, row, col] += val[b] * W_slice[oc]
-            end
+    actual_col_size = B * H_out * W_out
+    # Zero used scratch to prevent numerical contamination
+    @view(X_col[1:IC*k*k, 1:actual_col_size]) .= 0.0
+    @inbounds for row in 1:H_out, col in 1:W_out, b_idx in 1:B
+        col_idx = (row-1)*W_out*B + (col-1)*B + b_idx
+        for ic in 1:IC, i in 1:k, j in 1:k
+            X_col[(ic-1)*k*k + (i-1)*k + j, col_idx] = X_pad[b_idx, ic, row+i-1, col+j-1]
         end
     end
-    for oc in 1:OC
-        out[:, oc, :, :] .+= b[oc]
+    W_mat = reshape(W, OC, IC * k * k)
+    out_mat = W_mat * (@view X_col[1:(IC*k*k), 1:actual_col_size])
+    out_reshaped = reshape(out_mat, OC, B, H_out, W_out)
+    for oc in 1:OC, b_idx in 1:B, r in 1:H_out, c in 1:W_out
+        out[b_idx, oc, r, c] = out_reshaped[oc, b_idx, r, c] + b[oc]
     end
-    return out
 end
 
-function conv2d_grad(X::Array{Float64, 4}, W::Array{Float64, 4}, d_out::Array{Float64, 4}, pad::Int)
+function conv2d_grad(X::Array{Float64, 4}, W::Array{Float64, 4}, d_out::Array{Float64, 4}, pad::Int, X_col::Array{Float64, 2})
     B, IC, H, W_in = size(X)
     OC, _, k, _ = size(W)
     H_out, W_out = size(d_out, 3), size(d_out, 4)
-    dW = zeros(size(W))
-    db = vec(mean(d_out, dims=(1,3,4)))
     X_pad = zeros(B, IC, H + 2pad, W_in + 2pad)
     X_pad[:, :, pad+1:H+pad, pad+1:W_in+pad] = X
-    dX_pad = zeros(size(X_pad))
-    for oc in 1:OC
-        d_out_oc = d_out[:, oc, :, :]
-        db[oc] = mean(d_out_oc)
-        for ic in 1:IC
-            for i in 1:k, j in 1:k
-                slice = X_pad[:, ic, i:i+H_out-1, j:j+W_out-1]
-                dW[oc, ic, i, j] = mean(d_out_oc .* slice)
-                dX_pad[:, ic, i:i+H_out-1, j:j+W_out-1] .+= W[oc, ic, i, j] .* d_out_oc ./ (H_out * W_out)
-            end
+    db = vec(sum(d_out, dims=(1,3,4))) ./ B # Sum spatial, average batch
+    d_out_perm = permutedims(d_out, (2, 1, 3, 4))
+    d_out_mat = reshape(d_out_perm, OC, B * H_out * W_out)
+    actual_col_size = B * H_out * W_out
+    # Zero used scratch to prevent numerical contamination
+    @view(X_col[1:IC*k*k, 1:actual_col_size]) .= 0.0
+    @inbounds for row in 1:H_out, col in 1:W_out, b_idx in 1:B
+        col_idx = (row-1)*W_out*B + (col-1)*B + b_idx
+        for ic in 1:IC, i in 1:k, j in 1:k
+            X_col[(ic-1)*k*k + (i-1)*k + j, col_idx] = X_pad[b_idx, ic, row+i-1, col+j-1]
         end
     end
+    # dW is normalized by sample count B
+    dW_mat = (d_out_mat * (@view X_col[1:(IC*k*k), 1:actual_col_size])') ./ B
+    dW = reshape(dW_mat, OC, IC, k, k)
+    W_mat = reshape(W, OC, IC * k * k)
+    dX_col = W_mat' * d_out_mat
+    dX_pad = zeros(B, IC, H + 2pad, W_in + 2pad)
+    for row in 1:H_out, col in 1:W_out, b_idx in 1:B
+        col_idx = (row-1)*W_out*B + (col-1)*B + b_idx
+        for ic in 1:IC, i in 1:k, j in 1:k
+            dX_pad[b_idx, ic, row+i-1, col+j-1] += dX_col[(ic-1)*k*k + (i-1)*k + j, col_idx]
+        end
+    end
+    # No normalization on dX
     dX = dX_pad[:, :, pad+1:H+pad, pad+1:W_in+pad]
     return dW, db, dX
 end
@@ -245,32 +253,29 @@ function fwd_conv_lif!(blk::ConvLIFBlock, X_seq::Array{Float64, 5}; training=fal
     blk.conv.inp = X_seq
     conv_out = zeros(B, OC, H, W, T)
     for t in 1:T
-        conv_out[:, :, :, :, t] = conv2d(X_seq[:, :, :, :, t], blk.conv.W, blk.conv.b, blk.conv.pad)
+        out_t = @view conv_out[:, :, :, :, t]
+        conv2d!(out_t, X_seq[:, :, :, :, t], blk.conv.W, blk.conv.b, blk.conv.pad, blk.conv.X_col)
     end
-    
-    # tdBN on synaptic input current per Zheng et al. 2020
     I_bn = apply_tdbn!(blk.bn, conv_out, V_THRESHOLD, training)
-    
     blk.U = zeros(B, OC, H, W, T + 1)
     blk.S = zeros(B, OC, H, W, T)
     blk.mask = ones(B, OC, H, W, T)
-    
     for t in 1:T
         for b in 1:B, c in 1:OC, i in 1:H, j in 1:W
             blk.U[b, c, i, j, t+1] = blk.U[b, c, i, j, t] * V_LEAK + I_bn[b, c, i, j, t]
         end
-        
         spikes = Float64.(blk.U[:, :, :, :, t+1] .> V_THRESHOLD)
         if training
-            mask = rand(B, OC, H, W) .> SPIKE_DROPOUT
+            # Proper Bernoulli dropout with scaling
+            scale = 1.0 / (1.0 - SPIKE_DROPOUT)
+            mask = Float64.(rand(B, OC, H, W) .> SPIKE_DROPOUT) .* scale
             spikes .*= mask
-            blk.mask[:, :, :, :, t] = Float64.(mask)
+            blk.mask[:, :, :, :, t] .= mask
         end
         blk.S[:, :, :, :, t] .= spikes
-        
-        # Soft reset on raw membrane
         for b in 1:B, c in 1:OC, i in 1:H, j in 1:W
-            blk.U[b, c, i, j, t+1] -= spikes[b, c, i, j] * V_THRESHOLD
+            # Clamped soft reset to prevent runaway firing
+            blk.U[b, c, i, j, t+1] = clamp(blk.U[b, c, i, j, t+1] - spikes[b, c, i, j] * V_THRESHOLD, -1.0, V_THRESHOLD)
         end
     end
     return blk.S
@@ -281,18 +286,14 @@ function bwd_conv_lif!(blk::ConvLIFBlock, dS::Array{Float64, 5}, lambda::Float64
     dU = zeros(B, OC, H, W)
     dI_bn = zeros(B, OC, H, W, T)
     dS_masked = dS .* blk.mask
-    
     for t in T:-1:1
-        # Correct surrogate operating point on raw membrane
         grad_s = surrogate_grad.(blk.U[:, :, :, :, t+1] .- V_THRESHOLD)
-        dU_curr = dS_masked[:, :, :, :, t] .* grad_s .+ dU .* V_LEAK
+        # Gate entire accumulated gradient through surrogate
+        dU_curr = (dS_masked[:, :, :, :, t] .+ dU .* V_LEAK) .* grad_s
         dI_bn[:, :, :, :, t] .= dU_curr
-        # Recurrent gradient for soft reset: ∂U_after/∂U_before = 1
         dU = dU_curr
     end
-    
-    # Gradient through tdBN back to conv
-    dI_raw = bwd_tdbn!(blk.bn, dI_bn)
+    dI_raw = bwd_tdbn!(blk.bn, dI_bn, V_THRESHOLD)
     return bwd_conv!(blk.conv, dI_raw, lambda, clip, T)
 end
 
@@ -301,7 +302,7 @@ function bwd_conv!(l::SpikeConv, d_out_seq::Array{Float64, 5}, lambda::Float64, 
     l.dW .= 0.0; l.db .= 0.0
     dX_seq = zeros(size(l.inp))
     for t in 1:T
-        dw, db, dx = conv2d_grad(l.inp[:, :, :, :, t], l.W, d_out_seq[:, :, :, :, t], l.pad)
+        dw, db, dx = conv2d_grad(l.inp[:, :, :, :, t], l.W, d_out_seq[:, :, :, :, t], l.pad, l.X_col)
         l.dW .+= dw ./ T
         l.db .+= db ./ T
         dX_seq[:, :, :, :, t] .= dx
@@ -314,16 +315,28 @@ function bwd_conv!(l::SpikeConv, d_out_seq::Array{Float64, 5}, lambda::Float64, 
     return dX_seq
 end
 
+mutable struct SpikeResBlock
+    blk1::ConvLIFBlock; blk2::ConvLIFBlock
+    clamp_mask::Array{Float64, 5}
+end
+
+function SpikeResBlock(C)
+    SpikeResBlock(ConvLIFBlock(C, C, 3; pad=1), ConvLIFBlock(C, C, 3; pad=1), zeros(0,0,0,0,0))
+end
+
 function fwd_res_block!(res::SpikeResBlock, X::Array{Float64, 5}; training=false)
     out1 = fwd_conv_lif!(res.blk1, X; training=training)
     out2 = fwd_conv_lif!(res.blk2, out1; training=training)
-    return min.(out2 .+ X, 1.0)
+    sum_spikes = out2 .+ X
+    res.clamp_mask = Float64.(sum_spikes .<= 1.0)
+    return min.(sum_spikes, 1.0)
 end
 
 function bwd_res_block!(res::SpikeResBlock, dOut::Array{Float64, 5}, lambda::Float64, clip::Float64)
-    dout1 = bwd_conv_lif!(res.blk2, dOut, lambda, clip)
+    dOut_masked = dOut .* res.clamp_mask
+    dout1 = bwd_conv_lif!(res.blk2, dOut_masked, lambda, clip)
     dX = bwd_conv_lif!(res.blk1, dout1, lambda, clip)
-    return dX .+ dOut
+    return (dX .+ dOut_masked)
 end
 
 mutable struct SpikePool
@@ -377,13 +390,16 @@ function fwd_lif!(blk::LIFBlock, X_seq::Array{Float64, 3}; training=false)
         end
         spikes = Float64.(blk.U[:, :, t+1] .> V_THRESHOLD)
         if training
-            mask = rand(no, B) .> SPIKE_DROPOUT
+            # Proper Bernoulli dropout with scaling
+            scale = 1.0 / (1.0 - SPIKE_DROPOUT)
+            mask = Float64.(rand(no, B) .> SPIKE_DROPOUT) .* scale
             spikes .*= mask
-            blk.mask[:, :, t] = Float64.(mask)
+            blk.mask[:, :, t] .= mask
         end
         blk.S[:, :, t] .= spikes
         for b in 1:B, n in 1:no
-            blk.U[n, b, t+1] -= spikes[n, b] * V_THRESHOLD
+            # Clamped soft reset to prevent runaway firing
+            blk.U[n, b, t+1] = clamp(blk.U[n, b, t+1] - spikes[n, b] * V_THRESHOLD, -1.0, V_THRESHOLD)
         end
     end
     return blk.S
@@ -391,18 +407,15 @@ end
 
 function bwd_lif!(blk::LIFBlock, dS::Array{Float64, 3}, lambda::Float64, clip::Float64)
     no, B, T = size(dS)
-    l = blk.layer
-    l.dW .= 0.0; l.db .= 0.0
-    dU = zeros(no, B)
-    dX = zeros(size(blk.inp))
+    l = blk.layer; l.dW .= 0.0; l.db .= 0.0
+    dU = zeros(no, B); dX = zeros(size(blk.inp))
     dS_masked = dS .* blk.mask
     for t in T:-1:1
         grad_s = surrogate_grad.(blk.U[:, :, t+1] .- V_THRESHOLD)
-        dU_curr = dS_masked[:, :, t] .+ dU .* V_LEAK
-        dI = dU_curr .* grad_s
-        l.dW .+= (dI * blk.inp[:, :, t]') ./ (B * T)
-        l.db .+= vec(mean(dI, dims=2)) ./ T
-        dX[:, :, t] = l.W' * dI
+        dU_curr = (dS_masked[:, :, t] .+ dU .* V_LEAK) .* grad_s
+        l.dW .+= (dU_curr * blk.inp[:, :, t]') ./ (B * T)
+        l.db .+= vec(mean(dU_curr, dims=2)) ./ T
+        dX[:, :, t] = l.W' * dU_curr
         dU = dU_curr
     end
     l.dW .+= lambda .* l.W
@@ -489,19 +502,33 @@ end
 
 function backward_v7!(net::GestureSNNv7, y_oh, y_pred, weights; lr=1e-3, l2=1e-5, clip=1.0)
     B = size(y_oh, 2)
-    y_smooth = y_oh .* (1 - LABEL_SMOOTHING) .+ (LABEL_SMOOTHING / 11)
-    d = (y_pred .- y_smooth)
+    num_classes = size(y_oh, 1)
+    y_smooth = y_oh .* (1 - LABEL_SMOOTHING) .+ (LABEL_SMOOTHING / num_classes)
+    # Apply normalized class weights to the gradient
+    y_b = [argmax(y_oh[:, i]) for i in 1:B]
+    w_batch = weights[y_b]
+    w_batch = w_batch ./ mean(w_batch) # Stabilize per-batch gradient scale
+    d = (y_pred .- y_smooth) .* reshape(w_batch, 1, B)
+    
     readout, alpha = apply_attention(net.attn, net.lif2.S)
     net.head.dW = d * readout' ./ B .+ l2 .* net.head.W
     net.head.db = vec(mean(d, dims=2))
+    # Gradient clipping on head
+    gnorm_h = sqrt(sum(net.head.dW.^2) + sum(net.head.db.^2))
+    if gnorm_h > clip; sc = clip/gnorm_h; net.head.dW .*= sc; net.head.db .*= sc; end
+    
     d_readout = net.head.W' * d
     bwd_attention!(net.attn, d_readout, net.lif2.S, alpha)
     no, _, T = size(net.lif2.S)
-    dS2 = zeros(no, B, T); for t in 1:T; dS2[:, :, t] = d_readout .* alpha[t]; end
+    dS2 = reshape(d_readout, no, B, 1) .* reshape(alpha, 1, 1, T)
     dS1 = bwd_lif!(net.lif2, dS2, l2, clip)
     dS_flat = bwd_lif!(net.lif1, dS1, l2, clip)
+    
+    # Derivations of spatial shapes
     res = DVS_RES_DOWN
-    dS_s3 = reshape(dS_flat, 128, res÷4, res÷4, B, T)
+    C3, H3, W3 = 128, res÷4, res÷4
+    @assert size(dS_flat, 1) == C3 * H3 * W3 "Shape mismatch in backward reshape"
+    dS_s3 = reshape(dS_flat, C3, H3, W3, B, T)
     dS_s3 = permutedims(dS_s3, (4, 1, 2, 3, 5))
     dS_res3 = bwd_res_block!(net.res3, dS_s3, l2, clip)
     dS_trans2 = bwd_conv_lif!(net.trans2, dS_res3, l2, clip)
@@ -550,8 +577,11 @@ function run_dvs_omega_v7()
     # Sanity Check
     X_sample = reshape(X_train[:, 1], 2, DVS_RES_DOWN, DVS_RES_DOWN, SNN_T_STEPS)
     pol1 = sum(X_sample[1, :, :, :]); pol2 = sum(X_sample[2, :, :, :])
-    println(">> Data Sanity: Polarity 1: $pol1, Polarity 2: $pol2")
-    if pol1 == pol2; println("!! WARNING: Polarities are identical. Check loader."); end
+    corr = cor(vec(X_sample[1,:,:,:]), vec(X_sample[2,:,:,:]))
+    println(">> Data Sanity: Polarity 1: $pol1, Polarity 2: $pol2, Correlation: $corr")
+    if pol1 == pol2 || corr > 0.8
+        println("!! WARNING: Polarity channels may be corrupted.")
+    end
     
     counts = zeros(11); for l in y_train; counts[l] += 1; end
     weights = sum(counts) ./ (11 .* max.(counts, 1.0))
@@ -576,6 +606,7 @@ function run_dvs_omega_v7()
         end
         perm = randperm(n)
         net.training = true
+        start_time = time()
         for i in 1:batch_size:n
             step += 1
             idx = perm[i:min(i+batch_size-1, n)]
@@ -587,6 +618,10 @@ function run_dvs_omega_v7()
             y_pred = forward_v7!(net, X_b)
             backward_v7!(net, y_oh, y_pred, weights; lr=lr)
             adam_step_v7!(net, lr, step)
+            
+            if i % 128 == 1 || i + batch_size > n
+                @printf("  [Epoch %d] Progress: %d/%d (Batch: %.2f s)\n", ep, i + length(y_b) - 1, n, (time() - start_time))
+            end
         end
         
         if ep == 1 || ep % 2 == 0

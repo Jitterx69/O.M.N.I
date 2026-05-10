@@ -165,7 +165,7 @@ O.M.N.I. deployed the **Omega v7 Pipeline**, featuring a suite of precision-engi
 6. **Temporal Attention with Jacobian Fix:** We upgraded the attention mechanism to use a mathematically correct Softmax Jacobian for the temporal weighting pass, ensuring that the model correctly "focuses" on the most informative time-bins of a gesture (e.g., the peak of a "Wave").
 
 **Dataset:** IBM DVS128 Gesture Dataset (11-class gesture recognition).
-**Benchmark:** Targeting >96% Test Accuracy.
+**Citation:** Amir, A., Taba, B., Berg, D., Melano, T., McKinstry, J., Di Nolfo, C., ... & Modha, D. S. (2017). *A Low Power, Fully Event-Based Gesture Recognition System*. In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR).
 
 ### 5.8 Particle Physics Discovery (HIGGS Omega v2)
 **Objective:** Scale the O.M.N.I. framework to handle massive, multi-million-row datasets necessary for detecting beyond-standard-model particles (like the Higgs Boson) without triggering memory allocation faults or excessive text-parsing bottlenecks.
