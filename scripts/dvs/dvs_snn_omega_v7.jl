@@ -102,8 +102,6 @@ mutable struct SpikeConv
     mW::Array{Float64, 4}; vW::Array{Float64, 4}
     mb::Vector{Float64}; vb::Vector{Float64}
     inp::Array{Float64, 5}
-    # Per-layer scratch buffer to avoid cross-layer corruption
-    X_col::Array{Float64, 2}
 end
 
 function SpikeConv(in_ch, out_ch, k; pad=1)
@@ -113,7 +111,7 @@ function SpikeConv(in_ch, out_ch, k; pad=1)
         zeros(out_ch, in_ch, k, k), zeros(out_ch),
         zeros(out_ch, in_ch, k, k), zeros(out_ch, in_ch, k, k),
         zeros(out_ch), zeros(out_ch),
-        zeros(0,0,0,0,0), zeros(in_ch*k*k, 32768)) # 32768 = 32*32*32 (B*H*W)
+        zeros(0,0,0,0,0))
 end
 
 mutable struct SpikeDense
@@ -189,15 +187,14 @@ function augment_dvs(X_b::Matrix{Float64}, res, T)
     return reshape(X_tensor, :, B)
 end
 
-function conv2d!(out::Array{Float64, 4}, X::Array{Float64, 4}, W::Array{Float64, 4}, b::Vector{Float64}, pad::Int, X_col::Array{Float64, 2})
+function conv2d!(out::AbstractArray{Float64, 4}, X::AbstractArray{Float64, 4}, W::Array{Float64, 4}, b::Vector{Float64}, pad::Int)
     B, IC, H, W_in = size(X)
     OC, _, k, _ = size(W)
     H_out, W_out = H + 2pad - k + 1, W_in + 2pad - k + 1
+    actual_col_size = B * H_out * W_out
+    X_col = zeros(IC * k * k, actual_col_size)
     X_pad = zeros(B, IC, H + 2pad, W_in + 2pad)
     X_pad[:, :, pad+1:H+pad, pad+1:W_in+pad] .= X
-    actual_col_size = B * H_out * W_out
-    # Zero used scratch to prevent numerical contamination
-    @view(X_col[1:IC*k*k, 1:actual_col_size]) .= 0.0
     @inbounds for row in 1:H_out, col in 1:W_out, b_idx in 1:B
         col_idx = (row-1)*W_out*B + (col-1)*B + b_idx
         for ic in 1:IC, i in 1:k, j in 1:k
@@ -205,25 +202,24 @@ function conv2d!(out::Array{Float64, 4}, X::Array{Float64, 4}, W::Array{Float64,
         end
     end
     W_mat = reshape(W, OC, IC * k * k)
-    out_mat = W_mat * (@view X_col[1:(IC*k*k), 1:actual_col_size])
+    out_mat = W_mat * X_col
     out_reshaped = reshape(out_mat, OC, B, H_out, W_out)
     for oc in 1:OC, b_idx in 1:B, r in 1:H_out, c in 1:W_out
         out[b_idx, oc, r, c] = out_reshaped[oc, b_idx, r, c] + b[oc]
     end
 end
 
-function conv2d_grad(X::Array{Float64, 4}, W::Array{Float64, 4}, d_out::Array{Float64, 4}, pad::Int, X_col::Array{Float64, 2})
+function conv2d_grad(X::AbstractArray{Float64, 4}, W::Array{Float64, 4}, d_out::AbstractArray{Float64, 4}, pad::Int)
     B, IC, H, W_in = size(X)
     OC, _, k, _ = size(W)
     H_out, W_out = size(d_out, 3), size(d_out, 4)
+    actual_col_size = B * H_out * W_out
+    X_col = zeros(IC * k * k, actual_col_size)
     X_pad = zeros(B, IC, H + 2pad, W_in + 2pad)
     X_pad[:, :, pad+1:H+pad, pad+1:W_in+pad] = X
     db = vec(sum(d_out, dims=(1,3,4))) ./ B # Sum spatial, average batch
     d_out_perm = permutedims(d_out, (2, 1, 3, 4))
-    d_out_mat = reshape(d_out_perm, OC, B * H_out * W_out)
-    actual_col_size = B * H_out * W_out
-    # Zero used scratch to prevent numerical contamination
-    @view(X_col[1:IC*k*k, 1:actual_col_size]) .= 0.0
+    d_out_mat = reshape(d_out_perm, OC, actual_col_size)
     @inbounds for row in 1:H_out, col in 1:W_out, b_idx in 1:B
         col_idx = (row-1)*W_out*B + (col-1)*B + b_idx
         for ic in 1:IC, i in 1:k, j in 1:k
@@ -231,7 +227,7 @@ function conv2d_grad(X::Array{Float64, 4}, W::Array{Float64, 4}, d_out::Array{Fl
         end
     end
     # dW is normalized by sample count B
-    dW_mat = (d_out_mat * (@view X_col[1:(IC*k*k), 1:actual_col_size])') ./ B
+    dW_mat = (d_out_mat * X_col') ./ B
     dW = reshape(dW_mat, OC, IC, k, k)
     W_mat = reshape(W, OC, IC * k * k)
     dX_col = W_mat' * d_out_mat
@@ -254,7 +250,7 @@ function fwd_conv_lif!(blk::ConvLIFBlock, X_seq::Array{Float64, 5}; training=fal
     conv_out = zeros(B, OC, H, W, T)
     for t in 1:T
         out_t = @view conv_out[:, :, :, :, t]
-        conv2d!(out_t, X_seq[:, :, :, :, t], blk.conv.W, blk.conv.b, blk.conv.pad, blk.conv.X_col)
+        conv2d!(out_t, X_seq[:, :, :, :, t], blk.conv.W, blk.conv.b, blk.conv.pad)
     end
     I_bn = apply_tdbn!(blk.bn, conv_out, V_THRESHOLD, training)
     blk.U = zeros(B, OC, H, W, T + 1)
@@ -302,7 +298,7 @@ function bwd_conv!(l::SpikeConv, d_out_seq::Array{Float64, 5}, lambda::Float64, 
     l.dW .= 0.0; l.db .= 0.0
     dX_seq = zeros(size(l.inp))
     for t in 1:T
-        dw, db, dx = conv2d_grad(l.inp[:, :, :, :, t], l.W, d_out_seq[:, :, :, :, t], l.pad, l.X_col)
+        dw, db, dx = conv2d_grad(l.inp[:, :, :, :, t], l.W, d_out_seq[:, :, :, :, t], l.pad)
         l.dW .+= dw ./ T
         l.db .+= db ./ T
         dX_seq[:, :, :, :, t] .= dx
