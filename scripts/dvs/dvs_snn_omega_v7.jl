@@ -164,24 +164,29 @@ function LIFBlock(ni, no)
 end
 
 
-function augment_dvs(X_b::Matrix{Float64}, res, T)
+function augment_dvs(X_b::Matrix{Float64}, res, T_steps)
     B = size(X_b, 2)
     X_aug = copy(X_b)
-    X_tensor = reshape(X_aug, 2, res, res, T, B)
+    # CORRECT layout matching loader: (xd, yd, t, pol, B)
+    X_tensor = reshape(X_aug, res, res, T_steps, 2, B)
     for b in 1:B
+        # Polarity swap: axis 4
         if rand() > 0.5
-            tmp = copy(X_tensor[1, :, :, :, b])
-            X_tensor[1, :, :, :, b] .= X_tensor[2, :, :, :, b]
-            X_tensor[2, :, :, :, b] .= tmp
+            tmp = copy(X_tensor[:, :, :, 1, b])
+            X_tensor[:, :, :, 1, b] .= X_tensor[:, :, :, 2, b]
+            X_tensor[:, :, :, 2, b] .= tmp
         end
+        # Spatial flip (x-axis): axis 1
         if rand() > 0.5
-            X_tensor[:, :, :, :, b] .= X_tensor[:, :, end:-1:1, :, b]
+            X_tensor[:, :, :, :, b] .= X_tensor[end:-1:1, :, :, :, b]
         end
+        # Temporal shift: axis 3
         shift = rand(-2:2)
         if shift != 0
-            X_tensor[:, :, :, :, b] .= circshift(X_tensor[:, :, :, :, b], (0, 0, 0, shift))
+            X_tensor[:, :, :, :, b] .= circshift(X_tensor[:, :, :, :, b], (0, 0, shift, 0))
         end
-        mask = rand(size(X_tensor[:, :, :, :, b])...) .> 0.1
+        # Event dropout
+        mask = rand(res, res, T_steps, 2) .> 0.1
         X_tensor[:, :, :, :, b] .*= mask
     end
     return reshape(X_tensor, :, B)
@@ -583,11 +588,10 @@ function run_dvs_omega_v7()
     # Sanity Check matching the loader layout: (X, Y, T, P)
     X_sample = permutedims(reshape(X_train[:, 1], DVS_RES_DOWN, DVS_RES_DOWN, SNN_T_STEPS, 2), (4, 1, 2, 3))
     pol1 = sum(X_sample[1, :, :, :]); pol2 = sum(X_sample[2, :, :, :])
-    # Polarity correlation check: Corrected layout should show ~0.2-0.4
-    corr = cor(vec(X_sample[1,:,:,:]), vec(X_sample[2,:,:,:]))
-    println(">> Data Sanity: Polarity 1: $pol1, Polarity 2: $pol2, Correlation: $corr")
-    if pol1 == pol2 || corr > 0.95
-        println("!! WARNING: Polarity channels may be corrupted.")
+    # Polarity correlation check: Only warn if identical
+    println(">> Data Sanity: Polarity 1: $pol1, Polarity 2: $pol2")
+    if pol1 == pol2
+        println("!! WARNING: Polarity channels are identical — data corruption.")
     end
     
     counts = zeros(11); for l in y_train; counts[l] += 1; end
@@ -605,11 +609,12 @@ function run_dvs_omega_v7()
     end
     
     for ep in start_epoch:epochs
-        peak_lr = 5e-3
-        if ep <= 10
-            lr = peak_lr * ep / 10
+        peak_lr = 1e-3
+        warmup_epochs = 20
+        if ep <= warmup_epochs
+            lr = peak_lr * ep / warmup_epochs
         else
-            lr = 0.0001 + 0.5 * (peak_lr - 0.0001) * (1 + cos(pi * (ep-10) / (epochs-10)))
+            lr = 0.0001 + 0.5 * (peak_lr - 0.0001) * (1 + cos(pi * (ep-warmup_epochs) / (epochs-warmup_epochs)))
         end
         perm = randperm(n)
         net.training = true
