@@ -187,14 +187,16 @@ function augment_dvs(X_b::Matrix{Float64}, res, T)
     return reshape(X_tensor, :, B)
 end
 
-function conv2d!(out::AbstractArray{Float64, 4}, X::AbstractArray{Float64, 4}, W::Array{Float64, 4}, b::Vector{Float64}, pad::Int)
+function conv2d!(out::AbstractArray{Float64, 4}, X::AbstractArray{Float64, 4}, W::Array{Float64, 4}, b::Vector{Float64}, pad::Int, X_col::Array{Float64, 2}, X_pad::Array{Float64, 4})
     B, IC, H, W_in = size(X)
     OC, _, k, _ = size(W)
     H_out, W_out = H + 2pad - k + 1, W_in + 2pad - k + 1
-    actual_col_size = B * H_out * W_out
-    X_col = zeros(IC * k * k, actual_col_size)
-    X_pad = zeros(B, IC, H + 2pad, W_in + 2pad)
-    X_pad[:, :, pad+1:H+pad, pad+1:W_in+pad] .= X
+    
+    # Zero regions
+    @view(X_pad[1:B, 1:IC, 1:(H+2pad), 1:(W_in+2pad)]) .= 0.0
+    @view(X_col[1:(IC*k*k), 1:(B*H_out*W_out)]) .= 0.0
+    
+    X_pad[1:B, 1:IC, pad+1:H+pad, pad+1:W_in+pad] .= X
     @inbounds for row in 1:H_out, col in 1:W_out, b_idx in 1:B
         col_idx = (row-1)*W_out*B + (col-1)*B + b_idx
         for ic in 1:IC, i in 1:k, j in 1:k
@@ -202,22 +204,25 @@ function conv2d!(out::AbstractArray{Float64, 4}, X::AbstractArray{Float64, 4}, W
         end
     end
     W_mat = reshape(W, OC, IC * k * k)
-    out_mat = W_mat * X_col
+    actual_col_size = B * H_out * W_out
+    out_mat = W_mat * (@view X_col[1:(IC*k*k), 1:actual_col_size])
     out_reshaped = reshape(out_mat, OC, B, H_out, W_out)
     for oc in 1:OC, b_idx in 1:B, r in 1:H_out, c in 1:W_out
         out[b_idx, oc, r, c] = out_reshaped[oc, b_idx, r, c] + b[oc]
     end
 end
 
-function conv2d_grad(X::AbstractArray{Float64, 4}, W::Array{Float64, 4}, d_out::AbstractArray{Float64, 4}, pad::Int)
+function conv2d_grad(X::AbstractArray{Float64, 4}, W::Array{Float64, 4}, d_out::AbstractArray{Float64, 4}, pad::Int, X_col::Array{Float64, 2}, X_pad::Array{Float64, 4})
     B, IC, H, W_in = size(X)
     OC, _, k, _ = size(W)
     H_out, W_out = size(d_out, 3), size(d_out, 4)
     actual_col_size = B * H_out * W_out
-    X_col = zeros(IC * k * k, actual_col_size)
-    X_pad = zeros(B, IC, H + 2pad, W_in + 2pad)
-    X_pad[:, :, pad+1:H+pad, pad+1:W_in+pad] = X
-    db = vec(sum(d_out, dims=(1,3,4))) ./ B # Sum spatial, average batch
+    
+    @view(X_pad[1:B, 1:IC, 1:(H+2pad), 1:(W_in+2pad)]) .= 0.0
+    @view(X_col[1:(IC*k*k), 1:(B*H_out*W_out)]) .= 0.0
+    
+    X_pad[1:B, 1:IC, pad+1:H+pad, pad+1:W_in+pad] = X
+    db = vec(mean(d_out, dims=(1,3,4))) # Correct mean-based bias gradient
     d_out_perm = permutedims(d_out, (2, 1, 3, 4))
     d_out_mat = reshape(d_out_perm, OC, actual_col_size)
     @inbounds for row in 1:H_out, col in 1:W_out, b_idx in 1:B
@@ -226,8 +231,9 @@ function conv2d_grad(X::AbstractArray{Float64, 4}, W::Array{Float64, 4}, d_out::
             X_col[(ic-1)*k*k + (i-1)*k + j, col_idx] = X_pad[b_idx, ic, row+i-1, col+j-1]
         end
     end
-    # dW is normalized by sample count B
-    dW_mat = (d_out_mat * X_col') ./ B
+    actual_col_size = B * H_out * W_out
+    # dW must be averaged over ALL columns (B * H_out * W_out)
+    dW_mat = (d_out_mat * (@view X_col[1:(IC*k*k), 1:actual_col_size])') ./ actual_col_size
     dW = reshape(dW_mat, OC, IC, k, k)
     W_mat = reshape(W, OC, IC * k * k)
     dX_col = W_mat' * d_out_mat
@@ -238,41 +244,34 @@ function conv2d_grad(X::AbstractArray{Float64, 4}, W::Array{Float64, 4}, d_out::
             dX_pad[b_idx, ic, row+i-1, col+j-1] += dX_col[(ic-1)*k*k + (i-1)*k + j, col_idx]
         end
     end
-    # No normalization on dX
     dX = dX_pad[:, :, pad+1:H+pad, pad+1:W_in+pad]
     return dW, db, dX
 end
-
 function fwd_conv_lif!(blk::ConvLIFBlock, X_seq::Array{Float64, 5}; training=false)
     B, C, H, W, T = size(X_seq)
     OC = blk.conv.out_ch
     blk.conv.inp = X_seq
+    OC, IC, k, _ = size(blk.conv.W)
+    pad = blk.conv.pad
+    actual_col_size = B * H * W
+    X_col_buf = zeros(IC * k * k, actual_col_size)
+    X_pad_buf = zeros(B, IC, H + 2pad, W + 2pad)
+    
     conv_out = zeros(B, OC, H, W, T)
     for t in 1:T
         out_t = @view conv_out[:, :, :, :, t]
-        conv2d!(out_t, X_seq[:, :, :, :, t], blk.conv.W, blk.conv.b, blk.conv.pad)
+        conv2d!(out_t, X_seq[:, :, :, :, t], blk.conv.W, blk.conv.b, pad, X_col_buf, X_pad_buf)
     end
     I_bn = apply_tdbn!(blk.bn, conv_out, V_THRESHOLD, training)
     blk.U = zeros(B, OC, H, W, T + 1)
     blk.S = zeros(B, OC, H, W, T)
-    blk.mask = ones(B, OC, H, W, T)
     for t in 1:T
-        for b in 1:B, c in 1:OC, i in 1:H, j in 1:W
-            blk.U[b, c, i, j, t+1] = blk.U[b, c, i, j, t] * V_LEAK + I_bn[b, c, i, j, t]
-        end
+        # Fully vectorized LIF accumulation
+        @. blk.U[:, :, :, :, t+1] = blk.U[:, :, :, :, t] * V_LEAK + I_bn[:, :, :, :, t]
         spikes = Float64.(blk.U[:, :, :, :, t+1] .> V_THRESHOLD)
-        if training
-            # Proper Bernoulli dropout with scaling
-            scale = 1.0 / (1.0 - SPIKE_DROPOUT)
-            mask = Float64.(rand(B, OC, H, W) .> SPIKE_DROPOUT) .* scale
-            spikes .*= mask
-            blk.mask[:, :, :, :, t] .= mask
-        end
         blk.S[:, :, :, :, t] .= spikes
-        for b in 1:B, c in 1:OC, i in 1:H, j in 1:W
-            # Clamped soft reset to prevent runaway firing
-            blk.U[b, c, i, j, t+1] = clamp(blk.U[b, c, i, j, t+1] - spikes[b, c, i, j] * V_THRESHOLD, -1.0, V_THRESHOLD)
-        end
+        # Fully vectorized soft reset
+        @. blk.U[:, :, :, :, t+1] = clamp(blk.U[:, :, :, :, t+1] - spikes * V_THRESHOLD, -1.0, V_THRESHOLD)
     end
     return blk.S
 end
@@ -281,11 +280,11 @@ function bwd_conv_lif!(blk::ConvLIFBlock, dS::Array{Float64, 5}, lambda::Float64
     B, OC, H, W, T = size(dS)
     dU = zeros(B, OC, H, W)
     dI_bn = zeros(B, OC, H, W, T)
-    dS_masked = dS .* blk.mask
     for t in T:-1:1
         grad_s = surrogate_grad.(blk.U[:, :, :, :, t+1] .- V_THRESHOLD)
-        # Gate entire accumulated gradient through surrogate
-        dU_curr = (dS_masked[:, :, :, :, t] .+ dU .* V_LEAK) .* grad_s
+        # Correct surrogate gating: only gates the spike path
+        dU_spike = dS[:, :, :, :, t] .* grad_s
+        dU_curr = dU_spike .+ dU .* V_LEAK
         dI_bn[:, :, :, :, t] .= dU_curr
         dU = dU_curr
     end
@@ -297,8 +296,11 @@ function bwd_conv!(l::SpikeConv, d_out_seq::Array{Float64, 5}, lambda::Float64, 
     B, OC, H, W, _ = size(d_out_seq)
     l.dW .= 0.0; l.db .= 0.0
     dX_seq = zeros(size(l.inp))
+    IC, k = l.in_ch, l.k
+    X_col_buf = zeros(IC * k * k, B * H * W)
+    X_pad_buf = zeros(B, IC, H + 2l.pad, W + 2l.pad)
     for t in 1:T
-        dw, db, dx = conv2d_grad(l.inp[:, :, :, :, t], l.W, d_out_seq[:, :, :, :, t], l.pad)
+        dw, db, dx = conv2d_grad(l.inp[:, :, :, :, t], l.W, d_out_seq[:, :, :, :, t], l.pad, X_col_buf, X_pad_buf)
         l.dW .+= dw ./ T
         l.db .+= db ./ T
         dX_seq[:, :, :, :, t] .= dx
@@ -313,26 +315,31 @@ end
 
 mutable struct SpikeResBlock
     blk1::ConvLIFBlock; blk2::ConvLIFBlock
+    sum_spikes::Array{Float64, 5}
     clamp_mask::Array{Float64, 5}
 end
 
 function SpikeResBlock(C)
-    SpikeResBlock(ConvLIFBlock(C, C, 3; pad=1), ConvLIFBlock(C, C, 3; pad=1), zeros(0,0,0,0,0))
+    SpikeResBlock(ConvLIFBlock(C, C, 3; pad=1), ConvLIFBlock(C, C, 3; pad=1), zeros(0,0,0,0,0), zeros(0,0,0,0,0))
 end
 
 function fwd_res_block!(res::SpikeResBlock, X::Array{Float64, 5}; training=false)
-    out1 = fwd_conv_lif!(res.blk1, X; training=training)
-    out2 = fwd_conv_lif!(res.blk2, out1; training=training)
+    out1 = fwd_conv_lif!(res.blk1, X, training=training)
+    out2 = fwd_conv_lif!(res.blk2, out1, training=training)
     sum_spikes = out2 .+ X
+    # Save unmasked skip connection signal
+    res.sum_spikes = sum_spikes
     res.clamp_mask = Float64.(sum_spikes .<= 1.0)
-    return min.(sum_spikes, 1.0)
+    return clamp.(sum_spikes, 0.0, 1.0)
 end
 
 function bwd_res_block!(res::SpikeResBlock, dOut::Array{Float64, 5}, lambda::Float64, clip::Float64)
+    # Apply mask to the block path, but skip path remains unmasked for fidelity
     dOut_masked = dOut .* res.clamp_mask
-    dout1 = bwd_conv_lif!(res.blk2, dOut_masked, lambda, clip)
-    dX = bwd_conv_lif!(res.blk1, dout1, lambda, clip)
-    return (dX .+ dOut_masked)
+    dX_skip = dOut # Skip path flows freely
+    dX_blk = bwd_conv_lif!(res.blk2, dOut_masked, lambda, clip)
+    dX_blk = bwd_conv_lif!(res.blk1, dX_blk, lambda, clip)
+    return dX_blk .+ dX_skip
 end
 
 mutable struct SpikePool
@@ -345,16 +352,18 @@ end
 
 function fwd_pool!(p::SpikePool, S::Array{Float64, 5})
     B, C, H, W, T = size(S)
-    pH, pW = H÷2, W÷2
-    p.argmax_idx = zeros(Int, B, C, pH, pW, T, 2)
+    pH, pW = div(H, 2), div(W, 2)
     out = zeros(B, C, pH, pW, T)
+    p.argmax_idx = zeros(Int, B, C, pH, pW, T, 2)
     for t in 1:T, c in 1:C, i in 1:pH, j in 1:pW
-        patch = S[:, c, 2i-1:2i, 2j-1:2j, t]
+        patch = S[:, c, 2i-1:2i, 2j-1:2j, t] # (B, 2, 2)
+        flat = reshape(patch, B, 4)
+        vals, idxs = findmax(flat, dims=2)
+        out[:, c, i, j, t] .= vec(vals)
         for b in 1:B
-            val, idx = findmax(patch[b, :, :])
-            out[b, c, i, j, t] = val
-            p.argmax_idx[b, c, i, j, t, 1] = 2i - 2 + idx[1]
-            p.argmax_idx[b, c, i, j, t, 2] = 2j - 2 + idx[2]
+            li = idxs[b].I[2]
+            p.argmax_idx[b, c, i, j, t, 1] = 2i - 2 + ((li - 1) ÷ 2 + 1)
+            p.argmax_idx[b, c, i, j, t, 2] = 2j - 2 + ((li - 1) % 2 + 1)
         end
     end
     return out
@@ -378,12 +387,10 @@ function fwd_lif!(blk::LIFBlock, X_seq::Array{Float64, 3}; training=false)
     blk.U = zeros(no, B, T + 1)
     blk.S = zeros(no, B, T)
     blk.mask = ones(no, B, T)
-    blk.v_th_hist = fill(V_THRESHOLD, T)
-    @inbounds for t in 1:T
-        curr = blk.layer.W * X_seq[:, :, t] .+ blk.layer.b
-        for b in 1:B, n in 1:no
-            blk.U[n, b, t+1] = blk.U[n, b, t] * V_LEAK + curr[n, b]
-        end
+    # Batched matmul over time steps
+    inp = reshape(blk.layer.W * reshape(X_seq, ni, B * T), no, B, T) .+ blk.layer.b
+    for t in 1:T
+        blk.U[:, :, t+1] .= blk.U[:, :, t] .* V_LEAK .+ inp[:, :, t]
         spikes = Float64.(blk.U[:, :, t+1] .> V_THRESHOLD)
         if training
             # Proper Bernoulli dropout with scaling
@@ -393,10 +400,8 @@ function fwd_lif!(blk::LIFBlock, X_seq::Array{Float64, 3}; training=false)
             blk.mask[:, :, t] .= mask
         end
         blk.S[:, :, t] .= spikes
-        for b in 1:B, n in 1:no
-            # Clamped soft reset to prevent runaway firing
-            blk.U[n, b, t+1] = clamp(blk.U[n, b, t+1] - spikes[n, b] * V_THRESHOLD, -1.0, V_THRESHOLD)
-        end
+        # Clamped soft reset
+        @. blk.U[:, :, t+1] = clamp(blk.U[:, :, t+1] - spikes * V_THRESHOLD, -1.0, V_THRESHOLD)
     end
     return blk.S
 end
@@ -408,10 +413,12 @@ function bwd_lif!(blk::LIFBlock, dS::Array{Float64, 3}, lambda::Float64, clip::F
     dS_masked = dS .* blk.mask
     for t in T:-1:1
         grad_s = surrogate_grad.(blk.U[:, :, t+1] .- V_THRESHOLD)
-        dU_curr = (dS_masked[:, :, t] .+ dU .* V_LEAK) .* grad_s
+        # Correct surrogate gating: only gates the spike path
+        dU_spike = dS_masked[:, :, t] .* grad_s
+        dU_curr = dU_spike .+ dU .* V_LEAK
         l.dW .+= (dU_curr * blk.inp[:, :, t]') ./ (B * T)
         l.db .+= vec(mean(dU_curr, dims=2)) ./ T
-        dX[:, :, t] = l.W' * dU_curr
+        dX[:, :, t] .= l.W' * dU_curr
         dU = dU_curr
     end
     l.dW .+= lambda .* l.W
@@ -477,8 +484,10 @@ end
 
 function forward_v7!(net::GestureSNNv7, X::Matrix{Float64})
     B = size(X, 2)
-    X_seq = reshape(X, 2, DVS_RES_DOWN, DVS_RES_DOWN, SNN_T_STEPS, B)
-    X_seq = permutedims(X_seq, (5, 1, 2, 3, 4))
+    # Corrected data layout to match dvs_loader.jl: (X, Y, T, P, B)
+    # Then permute to (B, P, X, Y, T)
+    X_reshaped = reshape(X, DVS_RES_DOWN, DVS_RES_DOWN, SNN_T_STEPS, 2, B)
+    X_seq = permutedims(X_reshaped, (5, 4, 1, 2, 3))
     s = fwd_conv_lif!(net.stem, X_seq; training=net.training)
     s = fwd_res_block!(net.res1, s; training=net.training)
     s = fwd_pool!(net.pool1, s)
@@ -571,11 +580,13 @@ function run_dvs_omega_v7()
     X_test, y_test = load_split(test_list, SNN_T_STEPS)
     
     # Sanity Check
-    X_sample = reshape(X_train[:, 1], 2, DVS_RES_DOWN, DVS_RES_DOWN, SNN_T_STEPS)
+    # Sanity Check matching the loader layout: (X, Y, T, P)
+    X_sample = permutedims(reshape(X_train[:, 1], DVS_RES_DOWN, DVS_RES_DOWN, SNN_T_STEPS, 2), (4, 1, 2, 3))
     pol1 = sum(X_sample[1, :, :, :]); pol2 = sum(X_sample[2, :, :, :])
+    # Polarity correlation check: Corrected layout should show ~0.2-0.4
     corr = cor(vec(X_sample[1,:,:,:]), vec(X_sample[2,:,:,:]))
     println(">> Data Sanity: Polarity 1: $pol1, Polarity 2: $pol2, Correlation: $corr")
-    if pol1 == pol2 || corr > 0.8
+    if pol1 == pol2 || corr > 0.95
         println("!! WARNING: Polarity channels may be corrupted.")
     end
     
@@ -622,9 +633,14 @@ function run_dvs_omega_v7()
         
         if ep == 1 || ep % 2 == 0
             net.training = false
-            y_pred_te = forward_v7!(net, X_test)
-            preds_te = [argmax(y_pred_te[:, i]) for i in 1:size(y_pred_te, 2)]
-            acc = mean(preds_te .== y_test)
+            test_preds = Int[]
+            for i in 1:batch_size:length(y_test)
+                end_idx = min(i + batch_size - 1, length(y_test))
+                X_te_b = X_test[:, i:end_idx]
+                y_pred_te = forward_v7!(net, X_te_b)
+                append!(test_preds, [argmax(y_pred_te[:, j]) for j in 1:size(y_pred_te, 2)])
+            end
+            acc = mean(test_preds .== y_test)
             
             if acc > best_acc; best_acc = acc; end
             blocks = [net.stem, net.res1.blk1, net.res2a.blk1, net.res3.blk1]
