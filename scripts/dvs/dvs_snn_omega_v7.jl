@@ -10,6 +10,12 @@ const SPIKE_DROPOUT = 0.05  # Only for Dense LIF
 const LABEL_SMOOTHING = 0.1
 const DVS_RES_DOWN = 32
 
+# --- Helpers ---
+function softmax_s(X)
+    ex = exp.(X .- maximum(X, dims=1))
+    return ex ./ sum(ex, dims=1)
+end
+
 # --- Model Components ---
 
 mutable struct tdBN
@@ -43,7 +49,10 @@ function apply_tdbn!(bn::tdBN, X::Array{Float64, 5}, training::Bool, V_th::Float
             # tdBN scaling: input current normalized such that mean=0, std=1
             std = sqrt.(v_val .+ bn.eps)
             bn.x_hat[:, :, :, :, t] .= (X[:, :, :, :, t] .- mu) ./ std
-            out[:, :, :, :, t] .= V_th .* bn.gamma .* bn.x_hat[:, :, :, :, t] .+ bn.beta
+            
+            gamma_r = reshape(bn.gamma, 1, C, 1, 1)
+            beta_r = reshape(bn.beta, 1, C, 1, 1)
+            out[:, :, :, :, t] .= V_th .* gamma_r .* bn.x_hat[:, :, :, :, t] .+ beta_r
             
             bn.running_mu .= 0.9 .* bn.running_mu .+ 0.1 .* vec(mu)
             bn.running_var .= 0.9 .* bn.running_var .+ 0.1 .* vec(v_val)
@@ -65,7 +74,8 @@ function bwd_tdbn!(bn::tdBN, d_out::Array{Float64, 5}, V_th::Float64)
     bn.d_gamma .= 0.0; bn.d_beta .= 0.0
     
     for t in 1:T
-        std = sqrt.(bn.var_t[:, t] .+ bn.eps)
+        v_val = bn.var_t[:, t]
+        std = reshape(sqrt.(v_val .+ bn.eps), 1, C, 1, 1)
         gamma = reshape(bn.gamma, 1, C, 1, 1)
         
         # Gradients for gamma and beta
@@ -76,9 +86,11 @@ function bwd_tdbn!(bn::tdBN, d_out::Array{Float64, 5}, V_th::Float64)
         
         # Gradient for X (Input) - Standard BN Jacobian
         dx_hat = d_out[:, :, :, :, t] .* V_th .* gamma
+        # d_var and d_mu are already (1, C, 1, 1) from sum(dims=(1,3,4))
         d_var = sum(dx_hat .* (bn.x_hat[:, :, :, :, t] .* -0.5 ./ (std.^2)), dims=(1, 3, 4))
-        d_mu = sum(dx_hat .* (-1.0 ./ std), dims=(1, 3, 4)) .+ d_var .* mean(-2.0 .* (bn.x_hat[:, :, :, :, t] .* std), dims=(1,3,4))
+        d_mu = sum(dx_hat .* (-1.0 ./ std), dims=(1, 3, 4))
         
+        # (X-mu) = x_hat * std
         dX[:, :, :, :, t] .= (dx_hat ./ std) .+ (d_var .* 2.0 .* (bn.x_hat[:, :, :, :, t] .* std) ./ N) .+ (d_mu ./ N)
     end
     return dX
@@ -131,8 +143,7 @@ function conv2d!(out, X, W, b, pad, X_col, X_pad)
     
     W_mat = reshape(W, OC, IC * k * k)
     out_mat = W_mat * X_col .+ b
-    out .= reshape(out_mat, OC, H_out, W_out, B)
-    out .= permutedims(out, (4, 1, 2, 3)) # (B, OC, H, W)
+    out .= permutedims(reshape(out_mat, OC, H_out, W_out, B), (4, 1, 2, 3))
     return X_col, X_pad
 end
 
